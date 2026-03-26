@@ -40,6 +40,8 @@ fi
 CONTAINER_NAME=${CONTAINER_NAME:-claude-dev}
 SHARED_FOLDER=${SHARED_FOLDER:-}
 FORWARDED_PORTS=${FORWARDED_PORTS:-}
+VM_MEMORY=${VM_MEMORY:-8G}
+VM_CPUS=${VM_CPUS:-4}
 
 IMAGE_NAME="claude-apple-container:latest"
 VOLUME_NAME="claude-home"
@@ -148,6 +150,8 @@ else
     -d
     --name "$CONTAINER_NAME"
     --ssh
+    -m "$VM_MEMORY"
+    -c "$VM_CPUS"
     -v "${VOLUME_NAME}:/home/claude"
   )
 
