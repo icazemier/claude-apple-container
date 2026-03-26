@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
-TOTAL_STEPS=4
+TOTAL_STEPS=5
 CURRENT_STEP=0
 
 die() { printf "${RED}ERROR:${NC} %s\n" "$*" >&2; exit 1; }
@@ -86,6 +86,16 @@ if [ -n "$FORWARDED_PORTS" ]; then
 fi
 
 ok
+
+# ─── Ensure container system is running ───────────────────────────────────────
+
+if ! container system info &>/dev/null; then
+  step "Starting container system..."
+  container system start --enable-kernel-install
+  ok
+else
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+fi
 
 # ─── Check if container is already running ────────────────────────────────────
 

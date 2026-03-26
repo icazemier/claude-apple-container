@@ -9,12 +9,22 @@ RUN apk update && apk add --no-cache \
     chromium \
     curl \
     git \
+    nodejs \
+    npm \
     nss \
+    openssh-client \
     python3 \
     sudo \
     shadow \
     vim \
-    wget
+    wget \
+    yarn
+
+# ─── Global npm packages (as root, before user switch) ───────────────────────
+
+RUN npm install -g \
+    @anthropic-ai/claude-code \
+    claude-flow@alpha
 
 # ─── Create claude user ──────────────────────────────────────────────────────
 
@@ -22,38 +32,17 @@ RUN adduser -D -s /bin/bash -h /home/claude claude \
     && echo "claude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/claude \
     && chmod 0440 /etc/sudoers.d/claude
 
-# ─── Node.js 22 via nvm ──────────────────────────────────────────────────────
-
 USER claude
 WORKDIR /home/claude
-
-ENV NVM_DIR=/home/claude/.nvm
-RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash \
-    && . "$NVM_DIR/nvm.sh" \
-    && nvm install 22 \
-    && nvm alias default 22 \
-    && nvm use default
-
-# ─── Global npm packages ─────────────────────────────────────────────────────
-
-ENV PATH="/home/claude/.nvm/versions/node/v22/bin:$PATH"
-RUN . "$NVM_DIR/nvm.sh" \
-    && npm install -g \
-       yarn \
-       @anthropic-ai/claude-code \
-       claude-flow@alpha
 
 # ─── Playwright (using Alpine's native Chromium) ─────────────────────────────
 
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
-RUN . "$NVM_DIR/nvm.sh" \
-    && npx playwright install-deps 2>/dev/null || true
 
 # ─── Clean up caches ─────────────────────────────────────────────────────────
 
-RUN . "$NVM_DIR/nvm.sh" \
-    && npm cache clean --force \
+RUN npm cache clean --force \
     && yarn cache clean 2>/dev/null || true
 
 # ─── Shell configuration ─────────────────────────────────────────────────────
@@ -72,11 +61,6 @@ shopt -s histappend
 HISTSIZE=1000
 HISTFILESIZE=2000
 shopt -s checkwinsize
-
-# ─── nvm ──────────────────────────────────────────────────────────────────────
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
 
 # ─── Playwright ───────────────────────────────────────────────────────────────
 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -134,4 +118,4 @@ BASHRC
 
 # ─── Default command ─────────────────────────────────────────────────────────
 
-CMD ["bash", "-l"]
+CMD ["sleep", "infinity"]
