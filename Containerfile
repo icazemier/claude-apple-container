@@ -4,6 +4,7 @@ FROM alpine:latest
 
 RUN apk update && apk add --no-cache \
     bash \
+    bash-completion \
     build-base \
     chromium \
     curl \
@@ -11,7 +12,9 @@ RUN apk update && apk add --no-cache \
     nss \
     python3 \
     sudo \
-    shadow
+    shadow \
+    vim \
+    wget
 
 # ─── Create claude user ──────────────────────────────────────────────────────
 
@@ -47,17 +50,44 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 RUN . "$NVM_DIR/nvm.sh" \
     && npx playwright install-deps 2>/dev/null || true
 
+# ─── Clean up caches ─────────────────────────────────────────────────────────
+
+RUN . "$NVM_DIR/nvm.sh" \
+    && npm cache clean --force \
+    && yarn cache clean 2>/dev/null || true
+
 # ─── Shell configuration ─────────────────────────────────────────────────────
 
 RUN cat >> /home/claude/.bashrc << 'BASHRC'
 
+# If not running interactively, don't do anything
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+
+# ─── History ──────────────────────────────────────────────────────────────────
+HISTCONTROL=ignoreboth
+shopt -s histappend
+HISTSIZE=1000
+HISTFILESIZE=2000
+shopt -s checkwinsize
+
 # ─── nvm ──────────────────────────────────────────────────────────────────────
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
 
 # ─── Playwright ───────────────────────────────────────────────────────────────
 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+# ─── Aliases ──────────────────────────────────────────────────────────────────
+alias ls='ls --color=auto'
+alias grep='grep --color=auto'
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
 
 # ─── Prompt ───────────────────────────────────────────────────────────────────
 parse_git_branch() {
@@ -65,17 +95,39 @@ parse_git_branch() {
 }
 PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[33m\]$(parse_git_branch)\[\033[00m\]\$ '
 
+# ─── Bash completion ─────────────────────────────────────────────────────────
+if [ -f /usr/share/bash-completion/bash_completion ]; then
+    . /usr/share/bash-completion/bash_completion
+fi
+
+# ─── SSH agent ────────────────────────────────────────────────────────────────
+SSH_AGENT_SOCK="$HOME/.ssh/agent.sock"
+export SSH_AUTH_SOCK="$SSH_AGENT_SOCK"
+if [ ! -S "$SSH_AGENT_SOCK" ] || ! ssh-add -l &>/dev/null 2>&1; then
+    rm -f "$SSH_AGENT_SOCK"
+    eval "$(ssh-agent -a "$SSH_AGENT_SOCK" -s)" > /dev/null
+fi
+
 # ─── Welcome ──────────────────────────────────────────────────────────────────
 if [ -z "$WELCOMED" ]; then
     export WELCOMED=1
     echo ""
-    echo "  claude-apple-container"
-    echo "  ─────────────────────"
-    echo "  claude     — Claude Code CLI"
-    echo "  claude-flow — Multi-agent orchestrator"
-    echo "  node       — $(node --version 2>/dev/null || echo 'not found')"
-    echo "  git        — $(git --version 2>/dev/null | cut -d' ' -f3 || echo 'not found')"
-    echo "  chromium   — $(chromium-browser --version 2>/dev/null | head -1 || echo 'not found')"
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║  claude-apple-container                                 ║"
+    echo "║                                                         ║"
+    echo "║  To get started, run: claude                            ║"
+    echo "║                                                         ║"
+    echo "║  Authentication options:                                 ║"
+    echo "║    1. Claude.ai subscription — claude will prompt you   ║"
+    echo "║       to log in via the browser on first run            ║"
+    echo "║    2. API key — export ANTHROPIC_API_KEY=your-key       ║"
+    echo "║                                                         ║"
+    echo "║  Available tools:                                       ║"
+    echo "║    claude         Claude Code CLI                       ║"
+    echo "║    claude-flow    Multi-agent orchestrator               ║"
+    echo "║    node           $(node --version 2>/dev/null || echo 'not found')                              ║"
+    echo "║    git            $(git --version 2>/dev/null | cut -d' ' -f3 || echo 'not found')                            ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
 fi
 BASHRC
