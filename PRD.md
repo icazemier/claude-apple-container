@@ -147,7 +147,7 @@ That's it. No Docker Desktop, no VirtualBox, no Vagrant, no QEMU, no Homebrew de
 
 | Script | Responsibility |
 |---|---|
-| `up.sh` | Verify prerequisites (Apple Silicon, `container` CLI installed), load `.env`, build image if needed, start the container, print connection info |
+| `up.sh` | Verify prerequisites (Apple Silicon, `container` CLI installed), ensure container system is running (auto-start + kernel install), load `.env`, build image if needed, start the container, print connection info |
 | `stop.sh` | Gracefully stop the running container |
 | `destroy.sh` | Stop container and remove all associated resources. `--all` flag also removes cached images and named volumes |
 | `shell.sh` | Open an interactive shell in the running container via `container exec` |
@@ -157,12 +157,13 @@ That's it. No Docker Desktop, no VirtualBox, no Vagrant, no QEMU, no Homebrew de
 Base: `alpine:latest` (ARM64)
 
 Layers:
-1. System packages: `git`, `curl`, `build-base`, `python3`, `bash`, `sudo`
-2. User: `claude` with passwordless sudo
-3. Node.js 22 via nvm
-4. Global npm packages: `@anthropic-ai/claude-code`, `claude-flow@alpha`, `yarn`, `playwright`
-5. Playwright Chromium (via Alpine's native `chromium` package)
-6. Welcome banner with usage instructions
+1. System packages: `nodejs`, `npm`, `yarn`, `git`, `curl`, `build-base`, `chromium`, `python3`, `bash`, `sudo`, `openssh-client`, `vim`, `wget`
+2. Global npm packages (as root): `@anthropic-ai/claude-code`, `claude-flow@alpha`
+3. User: `claude` with passwordless sudo
+4. Playwright config (using Alpine's native `chromium` package)
+5. Shell configuration + welcome banner
+
+Note: Node.js is installed via Alpine's native `nodejs` package (not nvm). nvm attempts to compile from source on musl/Alpine which fails. Alpine's package is prebuilt for ARM64.
 
 No SSH server needed — `container exec` provides direct shell access.
 
@@ -227,13 +228,15 @@ Note: Full container-to-container networking requires macOS 26 (Tahoe).
 The Containerfile bakes in the full environment. No separate `provision.sh` needed:
 
 - `claude` user with passwordless sudo
-- Node.js 22 (via nvm)
+- Node.js 22 (Alpine native package, not nvm)
 - Claude Code (`@anthropic-ai/claude-code`)
 - claude-flow (`claude-flow@alpha`)
 - Playwright + Chromium (Alpine native package)
-- Git configured and ready
+- Git, vim, curl, wget, build-base, python3
+- SSH agent auto-start in `.bashrc`
 - Host SSH agent forwarding (via `--ssh` flag)
-- Welcome banner with usage instructions
+- Welcome banner with auth instructions
+- Container stays alive via `sleep infinity` (shell access via `container exec`)
 
 ## Developer Experience
 
@@ -317,13 +320,20 @@ claude-apple-container/
 └── shell.sh              # Open interactive shell via container exec
 ```
 
+## Resolved Questions
+
+| # | Question | Resolution |
+|---|---|---|
+| 1 | Is `container` CLI available via Homebrew? | No — signed `.pkg` installer from GitHub releases only |
+| 2 | Does nvm work on Alpine? | No — nvm tries to compile Node.js from source on musl, fails. Use Alpine's native `nodejs` package instead |
+| 3 | Does the container stay alive in detached mode? | `bash -l` exits immediately. Use `sleep infinity` as CMD, access via `container exec` |
+| 4 | Does `container system start` need manual setup? | Yes — requires kernel install on first run. `up.sh` handles this with `--enable-kernel-install` flag |
+
 ## Open Questions
 
 | # | Question | Impact |
 |---|---|---|
-| 1 | Is `container` CLI available via Homebrew or only via Apple's installer packages? | Affects prerequisite check in `up.sh` and README install instructions |
-| 2 | Does the Playwright + Alpine chromium workaround function correctly on ARM64 in Apple Containers? | May require fallback to Wolfi OS |
-| 3 | What is the exact `container run` flag syntax for memory/CPU limits? | Affects whether we expose `VM_MEMORY`/`VM_CPUS` in `.env` |
+| 1 | Does the Playwright + Alpine chromium workaround function correctly on ARM64 in Apple Containers? | May require fallback to Wolfi OS |
 
 ## Caveats
 
@@ -331,6 +341,9 @@ claude-apple-container/
 - **macOS 26 (Tahoe) required** for full container-to-container networking; macOS 15 supports basic container-to-host and port forwarding
 - **Framework is v0.10.0** — still maturing; earlier versions had stop/start bugs with volumes (fixed in v0.4.1)
 - **Image unpacking can be slow** — large images may take minutes to unpack (Apple's custom Swift EXT4 implementation is being optimized)
+- **nvm does not work on Alpine** — it attempts to compile Node.js from source against musl libc, which fails. Use Alpine's native `nodejs` package instead
+- **npm install -g requires root** — global packages must be installed before `USER` switch in Containerfile, or with `sudo`
+- **Builder disk space** — the builder VM has limited disk; large images (Chromium + Claude Code) can exhaust it. Free host disk space or `container builder rm` to reset
 
 ## Future Enhancements (v2+)
 

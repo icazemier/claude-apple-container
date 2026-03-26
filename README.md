@@ -5,11 +5,11 @@ A Claude Code development environment running in Apple's native Containerization
 ## What's Included
 
 - **Alpine Linux** (~5 MB base, ARM64)
-- **Node.js 22** via nvm
+- **Node.js 22** (Alpine native package)
 - **Claude Code** (`@anthropic-ai/claude-code`)
 - **claude-flow** orchestrator (`claude-flow@alpha`)
 - **Playwright** with Chromium (Alpine native build)
-- Build essentials, git, curl, vim, python3
+- Build essentials, git, curl, vim, python3, yarn
 
 ## Prerequisites
 
@@ -166,20 +166,19 @@ Services are reachable at `localhost:<port>` on the host.
 Install from [github.com/apple/container/releases](https://github.com/apple/container/releases). It's a signed `.pkg` installer.
 
 **Container won't start:**
-Check that the container system is running:
+`up.sh` auto-starts the container system, but if you still have issues:
 ```bash
-container system start
+container system start --enable-kernel-install
 ```
 
 **Shared folder not appearing:**
 Ensure `SHARED_FOLDER` is set in `.env` and points to an existing directory before running `./up.sh`. The variable must be set when creating the container (not when starting an existing one).
 
 **npm packages not installed:**
-All npm packages are installed via nvm for the `claude` user. To reinstall manually:
+Global npm packages are installed as root in the Containerfile. To reinstall manually:
 ```bash
 ./shell.sh
-source ~/.nvm/nvm.sh
-npm install -g @anthropic-ai/claude-code claude-flow@alpha playwright
+sudo npm install -g @anthropic-ai/claude-code claude-flow@alpha
 ```
 
 **Chromium/Playwright issues:**
@@ -210,6 +209,7 @@ Apple Containers runs each container in its own dedicated lightweight virtual ma
 ```
 ./up.sh runs
   → Checks prerequisites (Apple Silicon, container CLI)
+  → Starts container system + installs kernel (if not running)
   → Builds OCI image from Containerfile (first run only)
   → Creates named volume for /home/claude (first run only)
   → Starts container with volume + shared folder mounts
