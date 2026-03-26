@@ -106,7 +106,8 @@ The directory appears at `/home/claude/shared` inside the container. Use your ho
 
 | What | Survives `stop`/`start`? | Survives `destroy` + `up`? |
 |---|---|---|
-| Installed packages (`apk add ...`) | Yes | No — add to Containerfile instead |
+| Installed packages (`apk add ...`) | Yes | No — use `packages.txt` instead |
+| Packages in `packages.txt` | Yes | Yes — reinstalled automatically |
 | `/home/claude` (SSH keys, config, history) | Yes | Yes — stored on named volume |
 | Project files in shared folder | Yes | Yes — lives on host |
 | Base tooling (Node.js, Claude Code, etc.) | Yes | Yes — part of the image |
@@ -114,12 +115,25 @@ The directory appears at `/home/claude/shared` inside the container. Use your ho
 
 ## Installing Additional Packages
 
+**Quick install** (persists across `stop`/`start`, lost on `destroy`):
+
 ```bash
 ./shell.sh
-sudo apk add python3 redis
+sudo apk add htop redis
 ```
 
-Packages persist across `stop`/`start`. They are lost on `destroy` + `up` — if you need them permanently, add them to the `Containerfile` and rebuild:
+**Persistent install** (survives `destroy` + `up`): add packages to `packages.txt`:
+
+```
+# packages.txt
+htop
+redis
+postgresql-client
+```
+
+Packages listed in `packages.txt` are automatically reinstalled every time `./up.sh` runs. This means you can safely `./destroy.sh && ./up.sh` (e.g. to change memory/CPU) without losing your tools.
+
+**Baked into the image** (for packages everyone needs): add them to the `Containerfile` and rebuild:
 
 ```bash
 ./destroy.sh

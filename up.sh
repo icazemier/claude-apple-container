@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
-TOTAL_STEPS=5
+TOTAL_STEPS=6
 CURRENT_STEP=0
 
 die() { printf "${RED}ERROR:${NC} %s\n" "$*" >&2; exit 1; }
@@ -172,6 +172,17 @@ else
 
   container run "${RUN_ARGS[@]}"
   ok
+fi
+
+# ─── Install extra packages from packages.txt ────────────────────────────────
+
+if [ -f "$SCRIPT_DIR/packages.txt" ]; then
+  PKGS=$(grep -v '^\s*#' "$SCRIPT_DIR/packages.txt" | grep -v '^\s*$' | tr '\n' ' ')
+  if [ -n "$PKGS" ]; then
+    step "Installing extra packages..."
+    container exec -u root "$CONTAINER_NAME" apk add --no-cache $PKGS >/dev/null 2>&1
+    ok
+  fi
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
