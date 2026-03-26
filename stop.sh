@@ -24,5 +24,8 @@ if [ "$STATE" != "running" ]; then
 fi
 
 echo "==> Stopping container $CONTAINER_NAME..."
-container stop "$CONTAINER_NAME"
+if ! container stop "$CONTAINER_NAME" 2>/dev/null; then
+  echo "==> Graceful stop failed, force killing..."
+  container kill "$CONTAINER_NAME" 2>/dev/null || true
+fi
 echo "Container stopped."

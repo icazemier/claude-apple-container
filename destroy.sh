@@ -29,14 +29,17 @@ STATE=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"
 
 if [ "$STATE" = "running" ]; then
   echo "==> Container is running — stopping first..."
-  container stop "$CONTAINER_NAME"
+  if ! container stop "$CONTAINER_NAME" 2>/dev/null; then
+    echo "==> Graceful stop failed, force killing..."
+    container kill "$CONTAINER_NAME" 2>/dev/null || true
+  fi
 fi
 
 # ─── Remove container ────────────────────────────────────────────────────────
 
 if [ -n "$STATE" ]; then
   echo "==> Removing container $CONTAINER_NAME..."
-  container rm "$CONTAINER_NAME"
+  container rm -f "$CONTAINER_NAME" 2>/dev/null || true
 fi
 
 # ─── Optionally remove volume and image ───────────────────────────────────────
