@@ -6,13 +6,19 @@ RUN apk update && apk add --no-cache \
     bash \
     bash-completion \
     build-base \
+    cairo-dev \
     chromium \
     curl \
+    giflib-dev \
     git \
+    jpeg-dev \
+    librsvg-dev \
     nodejs \
     npm \
     nss \
     openssh-client \
+    pango-dev \
+    pixman-dev \
     python3 \
     sudo \
     shadow \

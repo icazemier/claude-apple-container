@@ -5,11 +5,12 @@ A Claude Code development environment running in Apple's native Containerization
 ## What's Included
 
 - **Alpine Linux** (~5 MB base, ARM64)
-- **Node.js 22** (Alpine native package)
+- **Node.js 24** + npm + yarn (Alpine native packages)
 - **Claude Code** (`@anthropic-ai/claude-code`)
 - **claude-flow** orchestrator (`claude-flow@alpha`)
 - **Playwright** with Chromium (Alpine native build)
-- Build essentials, git, curl, vim, python3, yarn
+- **Native module build deps**: cairo, pango, pixman, libjpeg, giflib, librsvg (for packages like `canvas`)
+- **Dev tools**: git, curl, wget, vim, python3, build-base (gcc/make/etc.), openssh-client
 
 ## Prerequisites
 
@@ -124,6 +125,28 @@ Packages persist across `stop`/`start`. They are lost on `destroy` + `up` — if
 ./destroy.sh
 ./up.sh
 ```
+
+## Native Node.js Modules
+
+The container includes build dependencies for common native modules like `canvas`, `sharp`, and others that need C/C++ compilation:
+
+| Dependency | Alpine Package | Used By |
+|---|---|---|
+| Cairo + Pango | `cairo-dev`, `pango-dev` | `canvas`, `pdfjs-dist` |
+| Pixman | `pixman-dev` | `canvas` |
+| libjpeg | `jpeg-dev` | `canvas`, `sharp` |
+| giflib | `giflib-dev` | `canvas` |
+| librsvg | `librsvg-dev` | `canvas` (SVG support) |
+| GCC/Make | `build-base` | All native modules |
+| Python | `python3` | `node-gyp` |
+
+If you encounter a missing native dependency, install it with:
+
+```bash
+sudo apk add <package-name>-dev
+```
+
+Then add it to the Containerfile to make it permanent.
 
 ## Connecting to Host Services
 

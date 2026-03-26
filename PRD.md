@@ -101,9 +101,9 @@ All required packages are available for `aarch64`:
 |---|---|---|
 | Tiny Core Linux | ~11 MB | No ARM64 container images; piCore kernel is RPi-specific |
 | Wolfi OS (Chainguard) | ~5.5 MB | No `chromium` apk package; smaller ecosystem |
-| Void Linux (musl-busybox) | ~14.4 MB | 3x Alpine; uncertain Node.js 22 availability; less familiar `xbps` |
+| Void Linux (musl-busybox) | ~14.4 MB | 3x Alpine; uncertain Node.js 24 availability; less familiar `xbps` |
 | Debian Slim | ~28 MB | 5x Alpine; pragmatic but unnecessarily large |
-| Chimera Linux | ~50-80 MB | No Node.js 22 LTS; large; untested on Apple Containers |
+| Chimera Linux | ~50-80 MB | No Node.js 24 LTS; large; untested on Apple Containers |
 | Distroless | ~141 MB | No shell or package manager; incompatible with interactive use |
 | BusyBox | ~1-2 MB | No package manager; would require rebuilding Alpine from scratch |
 
@@ -232,7 +232,7 @@ Note: Full container-to-container networking requires macOS 26 (Tahoe).
 The Containerfile bakes in the full environment. No separate `provision.sh` needed:
 
 - `claude` user with passwordless sudo
-- Node.js 22 (Alpine native package, not nvm)
+- Node.js 24 (Alpine native package, not nvm)
 - Claude Code (`@anthropic-ai/claude-code`)
 - claude-flow (`claude-flow@alpha`)
 - Playwright + Chromium (Alpine native package)
