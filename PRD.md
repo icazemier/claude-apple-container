@@ -176,6 +176,7 @@ No SSH server needed — `container exec` provides direct shell access.
 | `CONTAINER_NAME` | `claude-dev` | Name for the container instance |
 | `VM_MEMORY` | `8G` | Memory allocated to the container VM (Apple default 1 GiB is too low) |
 | `VM_CPUS` | `4` | CPU cores allocated to the container VM |
+| `EXTRA_PACKAGES` | _(none)_ | Space-separated Alpine packages, auto-installed on every `up.sh` (survives destroy + recreate) |
 
 Note: Memory and CPU are set at container creation time. Changing them requires `destroy` + `up` (not just stop/start). Disk is sparse and does not need configuration.
 
