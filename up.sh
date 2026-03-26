@@ -42,6 +42,7 @@ SHARED_FOLDER=${SHARED_FOLDER:-}
 FORWARDED_PORTS=${FORWARDED_PORTS:-}
 VM_MEMORY=${VM_MEMORY:-8G}
 VM_CPUS=${VM_CPUS:-4}
+EXTRA_PACKAGES=${EXTRA_PACKAGES:-}
 
 IMAGE_NAME="claude-apple-container:latest"
 VOLUME_NAME="claude-home"
@@ -174,15 +175,14 @@ else
   ok
 fi
 
-# ─── Install extra packages from packages.txt ────────────────────────────────
+# ─── Install extra packages from .env ─────────────────────────────────────────
 
-if [ -f "$SCRIPT_DIR/packages.txt" ]; then
-  PKGS=$(grep -v '^\s*#' "$SCRIPT_DIR/packages.txt" | grep -v '^\s*$' | tr '\n' ' ')
-  if [ -n "$PKGS" ]; then
-    step "Installing extra packages..."
-    container exec -u root "$CONTAINER_NAME" apk add --no-cache $PKGS >/dev/null 2>&1
-    ok
-  fi
+if [ -n "$EXTRA_PACKAGES" ]; then
+  step "Installing extra packages..."
+  container exec -u root "$CONTAINER_NAME" apk add --no-cache $EXTRA_PACKAGES >/dev/null 2>&1
+  ok
+else
+  CURRENT_STEP=$((CURRENT_STEP + 1))
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────

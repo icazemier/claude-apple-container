@@ -1,8 +1,0 @@
-# Extra Alpine packages to install on every ./up.sh
-# These survive destroy + recreate (reinstalled automatically).
-# One package per line. Comments and blank lines are ignored.
-#
-# Example:
-# htop
-# redis
-# postgresql-client

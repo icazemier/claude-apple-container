@@ -87,6 +87,7 @@ cp .env.example .env
 | `CONTAINER_NAME` | `claude-dev` | Name for the container instance |
 | `VM_MEMORY` | `8G` | Memory allocated to the container VM |
 | `VM_CPUS` | `4` | CPU cores allocated to the container VM |
+| `EXTRA_PACKAGES` | _(none)_ | Space-separated Alpine packages, installed on every `./up.sh` |
 
 Changes take effect after `./stop.sh && ./up.sh`.
 
@@ -106,8 +107,8 @@ The directory appears at `/home/claude/shared` inside the container. Use your ho
 
 | What | Survives `stop`/`start`? | Survives `destroy` + `up`? |
 |---|---|---|
-| Installed packages (`apk add ...`) | Yes | No — use `packages.txt` instead |
-| Packages in `packages.txt` | Yes | Yes — reinstalled automatically |
+| Installed packages (`apk add ...`) | Yes | No — use `EXTRA_PACKAGES` instead |
+| `EXTRA_PACKAGES` in `.env` | Yes | Yes — reinstalled automatically |
 | `/home/claude` (SSH keys, config, history) | Yes | Yes — stored on named volume |
 | Project files in shared folder | Yes | Yes — lives on host |
 | Base tooling (Node.js, Claude Code, etc.) | Yes | Yes — part of the image |
@@ -122,16 +123,13 @@ The directory appears at `/home/claude/shared` inside the container. Use your ho
 sudo apk add htop redis
 ```
 
-**Persistent install** (survives `destroy` + `up`): add packages to `packages.txt`:
+**Persistent install** (survives `destroy` + `up`): add to `EXTRA_PACKAGES` in `.env`:
 
-```
-# packages.txt
-htop
-redis
-postgresql-client
+```bash
+EXTRA_PACKAGES=htop redis postgresql-client
 ```
 
-Packages listed in `packages.txt` are automatically reinstalled every time `./up.sh` runs. This means you can safely `./destroy.sh && ./up.sh` (e.g. to change memory/CPU) without losing your tools.
+These are automatically reinstalled every time `./up.sh` runs. You can safely `./destroy.sh && ./up.sh` (e.g. to change memory/CPU) without losing your tools.
 
 **Baked into the image** (for packages everyone needs): add them to the `Containerfile` and rebuild:
 
