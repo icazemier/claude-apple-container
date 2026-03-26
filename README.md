@@ -84,8 +84,12 @@ cp .env.example .env
 | `SHARED_FOLDER` | _(none)_ | Host path mounted at `/home/claude/shared` in the container |
 | `FORWARDED_PORTS` | _(none)_ | Comma-separated ports to forward, e.g. `3000,5173` |
 | `CONTAINER_NAME` | `claude-dev` | Name for the container instance |
+| `VM_MEMORY` | `8G` | Memory allocated to the container VM |
+| `VM_CPUS` | `4` | CPU cores allocated to the container VM |
 
 Changes take effect after `./stop.sh && ./up.sh`.
+
+**Important:** Memory and CPU are set at container creation time. Changing `VM_MEMORY` or `VM_CPUS` requires `./destroy.sh && ./up.sh` (not just stop/start). Your `/home/claude` data is preserved on the named volume.
 
 ## Shared Folder
 
@@ -105,6 +109,7 @@ The directory appears at `/home/claude/shared` inside the container. Use your ho
 | `/home/claude` (SSH keys, config, history) | Yes | Yes — stored on named volume |
 | Project files in shared folder | Yes | Yes — lives on host |
 | Base tooling (Node.js, Claude Code, etc.) | Yes | Yes — part of the image |
+| VM memory / CPU settings | Yes | Applied from `.env` on recreate |
 
 ## Installing Additional Packages
 
@@ -148,6 +153,30 @@ FORWARDED_PORTS=3000,3001,5173
 ```
 
 Services are reachable at `localhost:<port>` on the host.
+
+## Resources
+
+The default 8G RAM / 4 CPUs is suitable for Claude Code + Chromium. Apple's own default (1 GiB) is too low and causes OOM kills.
+
+**Disk** does not need pre-allocation — Apple Containers uses sparse files that only consume actual bytes written on your host disk. A "512 GiB" disk might only use a few GB in practice.
+
+To monitor resource usage:
+
+```bash
+container stats              # real-time CPU, memory, I/O (like top)
+container stats --no-stream  # one-shot snapshot
+```
+
+To change resources, edit `.env` and recreate:
+
+```bash
+# In .env:
+VM_MEMORY=16G
+VM_CPUS=8
+
+# Then:
+./destroy.sh && ./up.sh      # /home/claude data preserved
+```
 
 ## Rebuild from Scratch
 

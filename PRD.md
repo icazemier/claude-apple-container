@@ -174,6 +174,10 @@ No SSH server needed — `container exec` provides direct shell access.
 | `SHARED_FOLDER` | _(none)_ | Host directory to mount at `/home/claude/shared` |
 | `FORWARDED_PORTS` | _(none)_ | Comma-separated list of TCP ports to forward |
 | `CONTAINER_NAME` | `claude-dev` | Name for the container instance |
+| `VM_MEMORY` | `8G` | Memory allocated to the container VM (Apple default 1 GiB is too low) |
+| `VM_CPUS` | `4` | CPU cores allocated to the container VM |
+
+Note: Memory and CPU are set at container creation time. Changing them requires `destroy` + `up` (not just stop/start). Disk is sparse and does not need configuration.
 
 #### FR-4: Container Access
 
@@ -328,6 +332,8 @@ claude-apple-container/
 | 2 | Does nvm work on Alpine? | No — nvm tries to compile Node.js from source on musl, fails. Use Alpine's native `nodejs` package instead |
 | 3 | Does the container stay alive in detached mode? | `bash -l` exits immediately. Use `sleep infinity` as CMD, access via `container exec` |
 | 4 | Does `container system start` need manual setup? | Yes — requires kernel install on first run. `up.sh` handles this with `--enable-kernel-install` flag |
+| 5 | What is the `container run` flag syntax for memory/CPU limits? | `-m 8G` and `-c 4`. Apple default is 1 GiB which OOM-kills Claude Code. We default to 8G/4 CPUs. Memory/CPU are set at creation time only — changing requires destroy + recreate |
+| 6 | Does disk need pre-allocation? | No — Apple Containers uses sparse EXT4 files (~512 GiB apparent, only actual bytes on host disk). No `--disk-size` flag exists |
 
 ## Open Questions
 
@@ -344,6 +350,7 @@ claude-apple-container/
 - **nvm does not work on Alpine** — it attempts to compile Node.js from source against musl libc, which fails. Use Alpine's native `nodejs` package instead
 - **npm install -g requires root** — global packages must be installed before `USER` switch in Containerfile, or with `sudo`
 - **Builder disk space** — the builder VM has limited disk; large images (Chromium + Claude Code) can exhaust it. Free host disk space or `container builder rm` to reset
+- **Memory/CPU require recreate** — these are set at container creation time. Changing `VM_MEMORY` or `VM_CPUS` requires `destroy` + `up` (named volume preserves `/home/claude` data)
 
 ## Future Enhancements (v2+)
 
