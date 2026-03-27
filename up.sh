@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
-TOTAL_STEPS=6
+TOTAL_STEPS=9
 CURRENT_STEP=0
 
 die() { printf "${RED}ERROR:${NC} %s\n" "$*" >&2; exit 1; }
@@ -43,6 +43,8 @@ FORWARDED_PORTS=${FORWARDED_PORTS:-}
 VM_MEMORY=${VM_MEMORY:-8G}
 VM_CPUS=${VM_CPUS:-4}
 EXTRA_PACKAGES=${EXTRA_PACKAGES:-}
+DOTFILES=${DOTFILES:-}
+COPY_FOLDERS=${COPY_FOLDERS:-}
 
 IMAGE_NAME="claude-apple-container:latest"
 VOLUME_NAME="claude-home"
@@ -75,6 +77,27 @@ fi
 if [ -n "$SHARED_FOLDER" ] && [ ! -d "$SHARED_FOLDER" ]; then
   fail
   die "SHARED_FOLDER does not exist: $SHARED_FOLDER"
+fi
+
+if [ -n "$DOTFILES" ]; then
+  for df in ${DOTFILES//,/ }; do
+    # Expand ~ manually since it doesn't expand inside quotes
+    df="${df/#\~/$HOME}"
+    if [ ! -e "$df" ]; then
+      fail
+      die "DOTFILES entry does not exist: $df"
+    fi
+  done
+fi
+
+if [ -n "$COPY_FOLDERS" ]; then
+  for cf in ${COPY_FOLDERS//,/ }; do
+    cf="${cf/#\~/$HOME}"
+    if [ ! -d "$cf" ]; then
+      fail
+      die "COPY_FOLDERS entry does not exist or is not a directory: $cf"
+    fi
+  done
 fi
 
 if [ -n "$FORWARDED_PORTS" ]; then
@@ -161,6 +184,51 @@ else
     RUN_ARGS+=(-v "${SHARED_FOLDER}:/home/claude/shared")
   fi
 
+  # Dotfiles — stage into temp dir and mount read-only
+  DOTFILES_STAGE=""
+  if [ -n "$DOTFILES" ]; then
+    DOTFILES_STAGE=$(mktemp -d)
+    for df in ${DOTFILES//,/ }; do
+      df="${df/#\~/$HOME}"
+      # Derive the relative path under $HOME (e.g. ~/.ssh → .ssh)
+      rel="${df#$HOME/}"
+      if [ "$rel" = "$df" ]; then
+        # Not under $HOME — use basename
+        rel="$(basename "$df")"
+      fi
+      if [ -d "$df" ]; then
+        mkdir -p "$DOTFILES_STAGE/$rel"
+        cp -a "$df/." "$DOTFILES_STAGE/$rel/"
+      else
+        mkdir -p "$DOTFILES_STAGE/$(dirname "$rel")"
+        cp -a "$df" "$DOTFILES_STAGE/$rel"
+      fi
+    done
+    RUN_ARGS+=(-v "${DOTFILES_STAGE}:/mnt/dotfiles:ro")
+  fi
+
+  # Copy folders — stage into temp dir and mount read-only
+  COPY_FOLDERS_STAGE=""
+  if [ -n "$COPY_FOLDERS" ]; then
+    COPY_FOLDERS_STAGE=$(mktemp -d)
+    for cf in ${COPY_FOLDERS//,/ }; do
+      cf="${cf/#\~/$HOME}"
+      # Derive the relative path under $HOME (e.g. ~/Development/Foo → Development/Foo)
+      rel="${cf#$HOME/}"
+      if [ "$rel" = "$cf" ]; then
+        rel="$(basename "$cf")"
+      fi
+      mkdir -p "$COPY_FOLDERS_STAGE/$rel"
+      # Use rsync to copy but exclude node_modules (they'll go to tmpfs anyway)
+      if command -v rsync &>/dev/null; then
+        rsync -a --exclude='node_modules' --exclude='.node_modules.old.*' "$cf/" "$COPY_FOLDERS_STAGE/$rel/"
+      else
+        cp -a "$cf/." "$COPY_FOLDERS_STAGE/$rel/"
+      fi
+    done
+    RUN_ARGS+=(-v "${COPY_FOLDERS_STAGE}:/mnt/copy_folders:ro")
+  fi
+
   # Port forwarding
   if [ -n "$FORWARDED_PORTS" ]; then
     for port in ${FORWARDED_PORTS//,/ }; do
@@ -175,6 +243,61 @@ else
   ok
 fi
 
+# ─── Restore dotfiles from host ───────────────────────────────────────────────
+
+if [ -n "$DOTFILES" ]; then
+  step "Restoring dotfiles..."
+  container exec "$CONTAINER_NAME" bash -c '
+    if [ -d /mnt/dotfiles ]; then
+      cd /mnt/dotfiles
+      find . -type f -o -type l | while read -r f; do
+        dest="$HOME/$f"
+        mkdir -p "$(dirname "$dest")"
+        if [ ! -e "$dest" ]; then
+          cp -a "$f" "$dest"
+        fi
+      done
+      # Fix SSH key permissions
+      if [ -d "$HOME/.ssh" ]; then
+        chmod 700 "$HOME/.ssh"
+        chmod 600 "$HOME/.ssh/"* 2>/dev/null || true
+        chmod 644 "$HOME/.ssh/"*.pub 2>/dev/null || true
+        chmod 644 "$HOME/.ssh/known_hosts" 2>/dev/null || true
+        chmod 644 "$HOME/.ssh/config" 2>/dev/null || true
+      fi
+    fi
+  ' 2>/dev/null
+  # Clean up staging directory
+  [ -n "$DOTFILES_STAGE" ] && rm -rf "$DOTFILES_STAGE"
+  ok
+else
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+fi
+
+# ─── Copy project folders from host ──────────────────────────────────────────
+
+if [ -n "$COPY_FOLDERS" ]; then
+  step "Copying project folders..."
+  container exec "$CONTAINER_NAME" bash -c '
+    if [ -d /mnt/copy_folders ]; then
+      cd /mnt/copy_folders
+      find . -mindepth 1 -maxdepth 1 -type d | while read -r d; do
+        dest="$HOME/$d"
+        if [ ! -d "$dest" ]; then
+          echo "    Copying $d..."
+          mkdir -p "$(dirname "$dest")"
+          cp -a "$d" "$dest"
+        fi
+      done
+    fi
+  '
+  # Clean up staging directory
+  [ -n "$COPY_FOLDERS_STAGE" ] && rm -rf "$COPY_FOLDERS_STAGE"
+  ok
+else
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+fi
+
 # ─── Install extra packages from .env ─────────────────────────────────────────
 
 if [ -n "$EXTRA_PACKAGES" ]; then
@@ -184,6 +307,20 @@ if [ -n "$EXTRA_PACKAGES" ]; then
 else
   CURRENT_STEP=$((CURRENT_STEP + 1))
 fi
+
+# ─── Ensure .bashrc sources /etc/profile.d/ (for nm-local, etc.) ─────────────
+
+step "Patching shell config..."
+container exec "$CONTAINER_NAME" bash -c '
+  MARKER="# ─── Source image-level profile scripts"
+  if ! grep -q "$MARKER" ~/.bashrc 2>/dev/null; then
+    sed -i "/^case \\\$- in/i\\
+$MARKER (survive volume mounts) ───────────────\\
+for f in /etc/profile.d/*.sh; do [ -r \"\\\$f\" ] \\&\\& . \"\\\$f\"; done\\
+" ~/.bashrc
+  fi
+' 2>/dev/null
+ok
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 

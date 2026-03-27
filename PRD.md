@@ -177,6 +177,8 @@ No SSH server needed — `container exec` provides direct shell access.
 | `VM_MEMORY` | `8G` | Memory allocated to the container VM (Apple default 1 GiB is too low) |
 | `VM_CPUS` | `4` | CPU cores allocated to the container VM |
 | `EXTRA_PACKAGES` | _(none)_ | Space-separated Alpine packages, auto-installed on every `up.sh` (survives destroy + recreate) |
+| `DOTFILES` | _(none)_ | Comma-separated host paths (e.g. `~/.ssh,~/.gitconfig`) copied into `/home/claude` on every `up.sh` (survives destroy --all) |
+| `COPY_FOLDERS` | _(none)_ | Comma-separated project folders (e.g. `~/Development/MyProject`) copied into `/home/claude` on every `up.sh` (node_modules excluded, survives destroy --all) |
 
 Note: Memory and CPU are set at container creation time. Changing them requires `destroy` + `up` (not just stop/start). Disk is sparse and does not need configuration.
 
@@ -352,6 +354,8 @@ claude-apple-container/
 - **npm install -g requires root** — global packages must be installed before `USER` switch in Containerfile, or with `sudo`
 - **Builder disk space** — the builder VM has limited disk; large images (Chromium + Claude Code) can exhaust it. Free host disk space or `container builder rm` to reset
 - **Memory/CPU require recreate** — these are set at container creation time. Changing `VM_MEMORY` or `VM_CPUS` requires `destroy` + `up` (named volume preserves `/home/claude` data)
+- **virtio-fs cannot handle node_modules** — all filesystems (rootfs, volumes, shared folders) use virtio-fs, which fails on deeply nested symlink-heavy directories. Workaround: `yarn`/`npm` wrappers in `/etc/profile.d/nm-local.sh` automatically relocate `node_modules` to a tmpfs mount. Lost on restart; re-run `yarn install`
+- **Dotfiles persistence** — `DOTFILES` in `.env` copies host files (e.g. `~/.ssh,~/.gitconfig`) into `/home/claude` on every `up.sh`, surviving `destroy --all`
 
 ## Future Enhancements (v2+)
 

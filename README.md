@@ -88,10 +88,51 @@ cp .env.example .env
 | `VM_MEMORY` | `8G` | Memory allocated to the container VM |
 | `VM_CPUS` | `4` | CPU cores allocated to the container VM |
 | `EXTRA_PACKAGES` | _(none)_ | Space-separated Alpine packages, installed on every `./up.sh` |
+| `DOTFILES` | _(none)_ | Comma-separated host paths to restore into `/home/claude` on every `./up.sh` |
+| `COPY_FOLDERS` | _(none)_ | Comma-separated project folders to copy into `/home/claude` on every `./up.sh` |
 
 Changes take effect after `./stop.sh && ./up.sh`.
 
 **Important:** Memory and CPU are set at container creation time. Changing `VM_MEMORY` or `VM_CPUS` requires `./destroy.sh && ./up.sh` (not just stop/start). Your `/home/claude` data is preserved on the named volume.
+
+## Dotfiles (SSH Keys, Git Config, etc.)
+
+Set `DOTFILES` in `.env` to automatically restore host files into the container on every `./up.sh`:
+
+```
+DOTFILES=~/.ssh,~/.gitconfig
+```
+
+This copies your SSH keys, git config, and any other files into `/home/claude` — surviving even `destroy --all`. Files are only copied if they don't already exist in the VM, so in-VM customizations are preserved. SSH key permissions are automatically fixed.
+
+You can include any file or directory under `~`:
+
+```
+DOTFILES=~/.ssh,~/.gitconfig,~/.npmrc,~/.config/gh
+```
+
+## Copy Project Folders
+
+Instead of using `SHARED_FOLDER` (which uses a live virtio-fs mount), you can copy project folders into the container:
+
+```
+COPY_FOLDERS=~/Development/EnkProject8,~/Development/AnotherProject
+```
+
+This copies each folder into `/home/claude/Development/...` on every `./up.sh` — but only if it doesn't already exist in the VM. `node_modules` are excluded from the copy (they'll be installed fresh on tmpfs via `nm-local`).
+
+This approach works better for Node.js projects since the files live on the volume instead of a live mount, and `node_modules` goes to tmpfs automatically.
+
+Note: this is a **one-way copy**. Changes inside the VM don't sync back to the host. Use `git` to push your work out.
+
+## node_modules on virtio-fs
+
+Apple Containers uses virtio-fs for all filesystems, which can't handle the deeply nested symlink-heavy structure of `node_modules`. The container includes an automatic workaround:
+
+- `yarn` and `npm` commands are wrapped to automatically relocate `node_modules` to a tmpfs (RAM-backed) mount
+- This happens transparently — just run `yarn install` as normal
+- You can also run `nm-local` manually in any project directory
+- Downside: `node_modules` is lost on container restart (just re-run `yarn install`)
 
 ## Shared Folder
 
@@ -109,7 +150,8 @@ The directory appears at `/home/claude/shared` inside the container. Use your ho
 |---|---|---|
 | Installed packages (`apk add ...`) | Yes | No — use `EXTRA_PACKAGES` instead |
 | `EXTRA_PACKAGES` in `.env` | Yes | Yes — reinstalled automatically |
-| `/home/claude` (SSH keys, config, history) | Yes | Yes — stored on named volume |
+| `/home/claude` (SSH keys, config, history) | Yes | Yes — stored on named volume (`DOTFILES` survives `--all`) |
+| `node_modules` | No (tmpfs) | No — re-run `yarn install` |
 | Project files in shared folder | Yes | Yes — lives on host |
 | Base tooling (Node.js, Claude Code, etc.) | Yes | Yes — part of the image |
 | VM memory / CPU settings | Yes | Applied from `.env` on recreate |

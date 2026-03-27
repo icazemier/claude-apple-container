@@ -19,12 +19,19 @@ RUN apk update && apk add --no-cache \
     openssh-client \
     pango-dev \
     pixman-dev \
+    py3-pip \
     python3 \
     sudo \
     shadow \
     vim \
     wget \
     yarn
+
+# ─── Azure CLI ────────────────────────────────────────────────────────────────
+
+RUN python3 -m venv /opt/az \
+    && /opt/az/bin/pip install --quiet azure-cli \
+    && ln -s /opt/az/bin/az /usr/local/bin/az
 
 # ─── Global npm packages (as root, before user switch) ───────────────────────
 
@@ -37,6 +44,56 @@ RUN npm install -g \
 RUN adduser -D -s /bin/bash -h /home/claude claude \
     && echo "claude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/claude \
     && chmod 0440 /etc/sudoers.d/claude
+
+
+# ─── nm-local: work around virtio-fs node_modules issue ──────────────────────
+# Placed in /etc/profile.d/ so it survives volume mounts over /home/claude.
+
+RUN cat > /etc/profile.d/nm-local.sh << 'NMLOCAL'
+# Apple Containers uses virtio-fs for ALL filesystems (rootfs, volumes,
+# shared folders). virtio-fs can't handle node_modules' deeply nested
+# symlink-heavy structure. nm-local symlinks node_modules to a tmpfs
+# (RAM-backed) mount, which is the only true native filesystem in the VM.
+# Downside: node_modules is lost on container restart (just re-run yarn).
+NM_TMPFS=/mnt/nm
+
+nm-local() {
+    local hash=$(echo "$PWD" | md5sum | cut -c1-12)
+    local local_nm="$NM_TMPFS/$hash"
+    if [ -L node_modules ]; then
+        echo "node_modules already linked → $(readlink node_modules)"
+        return 0
+    fi
+    # Ensure tmpfs is mounted
+    if ! mountpoint -q "$NM_TMPFS" 2>/dev/null; then
+        sudo mkdir -p "$NM_TMPFS"
+        sudo mount -t tmpfs -o size=2G tmpfs "$NM_TMPFS"
+        sudo chown claude:claude "$NM_TMPFS"
+    fi
+    if [ -d node_modules ]; then
+        # rm/find fail on virtio-fs too, so rename in-place (instant, same fs)
+        echo "Moving existing node_modules out of the way..."
+        mv node_modules ".node_modules.old.$$"
+    fi
+    mkdir -p "$local_nm"
+    ln -s "$local_nm" node_modules
+    echo "node_modules → $local_nm (tmpfs)"
+}
+
+yarn() {
+    if [[ "$PWD" == /home/claude/* ]] && [ ! -L node_modules ]; then
+        nm-local
+    fi
+    command yarn "$@"
+}
+
+npm() {
+    if [[ "$PWD" == /home/claude/* ]] && [ ! -L node_modules ]; then
+        nm-local
+    fi
+    command npm "$@"
+}
+NMLOCAL
 
 USER claude
 WORKDIR /home/claude
@@ -60,6 +117,9 @@ case $- in
     *i*) ;;
       *) return;;
 esac
+
+# ─── Source image-level profile scripts (survive volume mounts) ───────────────
+for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
 
 # ─── History ──────────────────────────────────────────────────────────────────
 HISTCONTROL=ignoreboth
@@ -97,6 +157,8 @@ if [ ! -S "$SSH_AGENT_SOCK" ] || ! ssh-add -l &>/dev/null 2>&1; then
     rm -f "$SSH_AGENT_SOCK"
     eval "$(ssh-agent -a "$SSH_AGENT_SOCK" -s)" > /dev/null
 fi
+# Auto-add all private keys to the agent
+grep -slR "PRIVATE" ~/.ssh/ 2>/dev/null | xargs -r ssh-add 2>/dev/null
 
 # ─── Welcome ──────────────────────────────────────────────────────────────────
 if [ -z "$WELCOMED" ]; then
@@ -115,8 +177,12 @@ if [ -z "$WELCOMED" ]; then
     echo "║  Available tools:                                       ║"
     echo "║    claude         Claude Code CLI                       ║"
     echo "║    claude-flow    Multi-agent orchestrator               ║"
+    echo "║    az             Azure CLI                             ║"
     echo "║    node           $(node --version 2>/dev/null || echo 'not found')                              ║"
     echo "║    git            $(git --version 2>/dev/null | cut -d' ' -f3 || echo 'not found')                            ║"
+    echo "║                                                         ║"
+    echo "║  Before yarn/npm install, run: nm-local                 ║"
+    echo "║  (moves node_modules to native fs — avoids virtio-fs)   ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
 fi
