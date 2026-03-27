@@ -59,17 +59,9 @@ RUN cat > /etc/profile.d/nm-local.sh << 'NMLOCAL'
 NM_IMG=/home/claude/.nm-local.img
 NM_MNT=/mnt/nm
 
-nm-local() {
-    local hash=$(echo "$PWD" | md5sum | cut -c1-12)
-    local local_nm="$NM_MNT/$hash"
-    if [ -L node_modules ]; then
-        echo "node_modules already linked → $(readlink node_modules)"
-        return 0
-    fi
-    # Create and mount ext4 sparse image if not already mounted
+_nm_ensure_mount() {
     if ! mountpoint -q "$NM_MNT" 2>/dev/null; then
         if [ ! -f "$NM_IMG" ]; then
-            # Sparse file: 20G apparent size, ~0 bytes on disk until written
             truncate -s 20G "$NM_IMG"
             mkfs.ext4 -q -m 0 "$NM_IMG"
             echo "Created nm-local ext4 image (20G sparse)"
@@ -78,6 +70,16 @@ nm-local() {
         sudo mount -o loop "$NM_IMG" "$NM_MNT"
         sudo chown claude:claude "$NM_MNT"
     fi
+}
+
+nm-local() {
+    local hash=$(echo "$PWD" | md5sum | cut -c1-12)
+    local local_nm="$NM_MNT/$hash"
+    if [ -L node_modules ]; then
+        echo "node_modules already linked → $(readlink node_modules)"
+        return 0
+    fi
+    _nm_ensure_mount
     if [ -d node_modules ]; then
         # rm/find fail on virtio-fs too, so rename in-place (instant, same fs)
         echo "Moving existing node_modules out of the way..."
@@ -86,6 +88,23 @@ nm-local() {
     mkdir -p "$local_nm"
     ln -s "$local_nm" node_modules
     echo "node_modules → $local_nm (ext4 image)"
+}
+
+# Wipe node_modules for current project and re-link
+nm-clean() {
+    local hash=$(echo "$PWD" | md5sum | cut -c1-12)
+    local local_nm="$NM_MNT/$hash"
+    _nm_ensure_mount
+    if [ -L node_modules ]; then
+        rm node_modules
+    fi
+    if [ -d "$local_nm" ]; then
+        rm -rf "$local_nm"
+        echo "Cleaned $local_nm"
+    fi
+    mkdir -p "$local_nm"
+    ln -s "$local_nm" node_modules
+    echo "node_modules → $local_nm (ext4 image, clean)"
 }
 
 yarn() {

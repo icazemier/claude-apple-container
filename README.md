@@ -132,6 +132,7 @@ Apple Containers uses virtio-fs for all filesystems, which can't handle the deep
 - `yarn` and `npm` commands are wrapped to automatically relocate `node_modules` to a loop-mounted ext4 sparse image
 - This happens transparently — just run `yarn install` as normal
 - You can also run `nm-local` manually in any project directory
+- Run `nm-clean` to wipe and re-link `node_modules` (useful after failed installs or workspace conflicts)
 - The image is sparse (20 GB apparent, only uses actual bytes written) and persists across restarts
 - Stored at `~/.nm-local.img` on the home volume
 
