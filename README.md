@@ -129,7 +129,7 @@ Note: this is a **one-way copy**. Changes inside the VM don't sync back to the h
 
 Apple Containers uses virtio-fs for all filesystems, which can't handle the deeply nested symlink-heavy structure of `node_modules`. The container includes an automatic workaround:
 
-- `yarn` and `npm` commands are wrapped to automatically relocate `node_modules` to a loop-mounted ext4 sparse image
+- `yarn` and `npm` commands are wrapped to automatically bind-mount `node_modules` from a loop-mounted ext4 sparse image
 - This happens transparently — just run `yarn install` as normal
 - You can also run `nm-local` manually in any project directory
 - Run `nm-clean` to wipe and re-link `node_modules` (useful after failed installs or workspace conflicts)
