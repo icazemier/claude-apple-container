@@ -354,7 +354,7 @@ claude-apple-container/
 - **npm install -g requires root** — global packages must be installed before `USER` switch in Containerfile, or with `sudo`
 - **Builder disk space** — the builder VM has limited disk; large images (Chromium + Claude Code) can exhaust it. Free host disk space or `container builder rm` to reset
 - **Memory/CPU require recreate** — these are set at container creation time. Changing `VM_MEMORY` or `VM_CPUS` requires `destroy` + `up` (named volume preserves `/home/claude` data)
-- **virtio-fs cannot handle node_modules** — all filesystems (rootfs, volumes, shared folders) use virtio-fs, which fails on deeply nested symlink-heavy directories. Workaround: `yarn`/`npm` wrappers in `/etc/profile.d/nm-local.sh` automatically relocate `node_modules` to a tmpfs mount. Lost on restart; re-run `yarn install`
+- **virtio-fs cannot handle node_modules** — all filesystems (rootfs, volumes, shared folders) use virtio-fs, which fails on deeply nested symlink-heavy directories. Workaround: `yarn`/`npm` wrappers in `/etc/profile.d/nm-local.sh` automatically relocate `node_modules` to a loop-mounted ext4 sparse image (`~/.nm-local.img`). Persists across restarts
 - **Dotfiles persistence** — `DOTFILES` in `.env` copies host files (e.g. `~/.ssh,~/.gitconfig`) into `/home/claude` on every `up.sh`, surviving `destroy --all`
 
 ## Future Enhancements (v2+)

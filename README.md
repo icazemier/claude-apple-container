@@ -119,9 +119,9 @@ Instead of using `SHARED_FOLDER` (which uses a live virtio-fs mount), you can co
 COPY_FOLDERS=~/Development/EnkProject8,~/Development/AnotherProject
 ```
 
-This copies each folder into `/home/claude/Development/...` on every `./up.sh` — but only if it doesn't already exist in the VM. `node_modules` are excluded from the copy (they'll be installed fresh on tmpfs via `nm-local`).
+This copies each folder into `/home/claude/Development/...` on every `./up.sh` — but only if it doesn't already exist in the VM. `node_modules` are excluded from the copy (they'll be installed fresh via `nm-local`).
 
-This approach works better for Node.js projects since the files live on the volume instead of a live mount, and `node_modules` goes to tmpfs automatically.
+This approach works better for Node.js projects since the files live on the volume instead of a live mount, and `node_modules` goes to a dedicated ext4 image automatically.
 
 Note: this is a **one-way copy**. Changes inside the VM don't sync back to the host. Use `git` to push your work out.
 
@@ -129,10 +129,11 @@ Note: this is a **one-way copy**. Changes inside the VM don't sync back to the h
 
 Apple Containers uses virtio-fs for all filesystems, which can't handle the deeply nested symlink-heavy structure of `node_modules`. The container includes an automatic workaround:
 
-- `yarn` and `npm` commands are wrapped to automatically relocate `node_modules` to a tmpfs (RAM-backed) mount
+- `yarn` and `npm` commands are wrapped to automatically relocate `node_modules` to a loop-mounted ext4 sparse image
 - This happens transparently — just run `yarn install` as normal
 - You can also run `nm-local` manually in any project directory
-- Downside: `node_modules` is lost on container restart (just re-run `yarn install`)
+- The image is sparse (20 GB apparent, only uses actual bytes written) and persists across restarts
+- Stored at `~/.nm-local.img` on the home volume
 
 ## Shared Folder
 
@@ -151,7 +152,7 @@ The directory appears at `/home/claude/shared` inside the container. Use your ho
 | Installed packages (`apk add ...`) | Yes | No — use `EXTRA_PACKAGES` instead |
 | `EXTRA_PACKAGES` in `.env` | Yes | Yes — reinstalled automatically |
 | `/home/claude` (SSH keys, config, history) | Yes | Yes — stored on named volume (`DOTFILES` survives `--all`) |
-| `node_modules` | No (tmpfs) | No — re-run `yarn install` |
+| `node_modules` | Yes (ext4 image) | Yes — stored on home volume |
 | Project files in shared folder | Yes | Yes — lives on host |
 | Base tooling (Node.js, Claude Code, etc.) | Yes | Yes — part of the image |
 | VM memory / CPU settings | Yes | Applied from `.env` on recreate |

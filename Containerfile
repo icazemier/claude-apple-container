@@ -9,6 +9,7 @@ RUN apk update && apk add --no-cache \
     cairo-dev \
     chromium \
     curl \
+    e2fsprogs \
     giflib-dev \
     git \
     jpeg-dev \
@@ -52,23 +53,30 @@ RUN adduser -D -s /bin/bash -h /home/claude claude \
 RUN cat > /etc/profile.d/nm-local.sh << 'NMLOCAL'
 # Apple Containers uses virtio-fs for ALL filesystems (rootfs, volumes,
 # shared folders). virtio-fs can't handle node_modules' deeply nested
-# symlink-heavy structure. nm-local symlinks node_modules to a tmpfs
-# (RAM-backed) mount, which is the only true native filesystem in the VM.
-# Downside: node_modules is lost on container restart (just re-run yarn).
-NM_TMPFS=/mnt/nm
+# symlink-heavy structure. nm-local symlinks node_modules to a loop-mounted
+# ext4 sparse image on disk — bypasses virtio-fs without eating RAM.
+# The image persists across container restarts (no need to re-install).
+NM_IMG=/home/claude/.nm-local.img
+NM_MNT=/mnt/nm
 
 nm-local() {
     local hash=$(echo "$PWD" | md5sum | cut -c1-12)
-    local local_nm="$NM_TMPFS/$hash"
+    local local_nm="$NM_MNT/$hash"
     if [ -L node_modules ]; then
         echo "node_modules already linked → $(readlink node_modules)"
         return 0
     fi
-    # Ensure tmpfs is mounted
-    if ! mountpoint -q "$NM_TMPFS" 2>/dev/null; then
-        sudo mkdir -p "$NM_TMPFS"
-        sudo mount -t tmpfs -o size=2G tmpfs "$NM_TMPFS"
-        sudo chown claude:claude "$NM_TMPFS"
+    # Create and mount ext4 sparse image if not already mounted
+    if ! mountpoint -q "$NM_MNT" 2>/dev/null; then
+        if [ ! -f "$NM_IMG" ]; then
+            # Sparse file: 20G apparent size, ~0 bytes on disk until written
+            truncate -s 20G "$NM_IMG"
+            mkfs.ext4 -q -m 0 "$NM_IMG"
+            echo "Created nm-local ext4 image (20G sparse)"
+        fi
+        sudo mkdir -p "$NM_MNT"
+        sudo mount -o loop "$NM_IMG" "$NM_MNT"
+        sudo chown claude:claude "$NM_MNT"
     fi
     if [ -d node_modules ]; then
         # rm/find fail on virtio-fs too, so rename in-place (instant, same fs)
@@ -77,7 +85,7 @@ nm-local() {
     fi
     mkdir -p "$local_nm"
     ln -s "$local_nm" node_modules
-    echo "node_modules → $local_nm (tmpfs)"
+    echo "node_modules → $local_nm (ext4 image)"
 }
 
 yarn() {
