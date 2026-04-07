@@ -45,6 +45,10 @@ VM_CPUS=${VM_CPUS:-4}
 EXTRA_PACKAGES=${EXTRA_PACKAGES:-}
 DOTFILES=${DOTFILES:-}
 COPY_FOLDERS=${COPY_FOLDERS:-}
+SWAP_SIZE=${SWAP_SIZE:-2G}
+WATCHDOG_MEM_CRIT_MB=${WATCHDOG_MEM_CRIT_MB:-400}
+WATCHDOG_MEM_RESUME_MB=${WATCHDOG_MEM_RESUME_MB:-1200}
+WATCHDOG_POLL=${WATCHDOG_POLL:-5}
 
 IMAGE_NAME="claude-apple-container:latest"
 VOLUME_NAME="claude-home"
@@ -260,6 +264,14 @@ if [ -z "$STATE" ]; then
     done
     RUN_ARGS+=(-v "${COPY_FOLDERS_STAGE}:/mnt/copy_folders:ro")
   fi
+
+  # Watchdog / swap env vars
+  RUN_ARGS+=(
+    -e "SWAP_SIZE=${SWAP_SIZE}"
+    -e "WATCHDOG_MEM_CRIT_MB=${WATCHDOG_MEM_CRIT_MB}"
+    -e "WATCHDOG_MEM_RESUME_MB=${WATCHDOG_MEM_RESUME_MB}"
+    -e "WATCHDOG_POLL=${WATCHDOG_POLL}"
+  )
 
   # Port forwarding
   if [ -n "$FORWARDED_PORTS" ]; then

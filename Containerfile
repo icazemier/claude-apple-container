@@ -137,6 +137,135 @@ npm() {
 }
 NMLOCAL
 
+# ─── Entrypoint: swap + watchdog + sleep ─────────────────────────────────────
+
+RUN cat > /usr/local/bin/entrypoint.sh << 'ENTRYPOINT_SCRIPT'
+#!/bin/bash
+set -e
+
+# ─── Swap (loop-mounted sparse file — bypasses virtio-fs) ───────────────────
+SWAP_IMG=/var/swap.img
+SWAP_SIZE="${SWAP_SIZE:-2G}"
+if ! swapon --show --noheadings 2>/dev/null | grep -q .; then
+    if [ ! -f "$SWAP_IMG" ]; then
+        truncate -s "$SWAP_SIZE" "$SWAP_IMG"
+    fi
+    SWAP_LOOP=$(losetup -f 2>/dev/null) || true
+    if [ -n "$SWAP_LOOP" ]; then
+        losetup "$SWAP_LOOP" "$SWAP_IMG" 2>/dev/null || true
+        mkswap -q "$SWAP_LOOP" >/dev/null 2>&1 || true
+        if swapon "$SWAP_LOOP" 2>/dev/null; then
+            echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
+        fi
+    fi
+fi
+
+# ─── Watchdog ────────────────────────────────────────────────────────────────
+/usr/local/bin/vm-watchdog.sh &
+
+exec sleep infinity
+ENTRYPOINT_SCRIPT
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# ─── VM watchdog: memory monitor + process throttler ─────────────────────────
+
+RUN cat > /usr/local/bin/vm-watchdog.sh << 'WATCHDOG_SCRIPT'
+#!/bin/bash
+set -e
+
+LOG=/var/log/vm-watchdog.log
+POLL="${WATCHDOG_POLL:-5}"
+MEM_CRIT_MB="${WATCHDOG_MEM_CRIT_MB:-400}"
+MEM_RESUME_MB="${WATCHDOG_MEM_RESUME_MB:-1200}"
+
+log() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" | tee -a "$LOG" >&2; }
+
+mem_avail_mb() { awk '/^MemAvailable:/ {printf "%d", $2/1024}' /proc/meminfo; }
+
+# Find heaviest processes by RSS, skipping system/shell processes
+heavy_pids() {
+    for d in /proc/[0-9]*; do
+        local pid="${d##*/}"
+        [ "$pid" = "$$" ] && continue
+        local comm rss_kb
+        comm=$(cat "$d/comm" 2>/dev/null) || continue
+        case "$comm" in
+            bash|sh|sleep|vm-watchdog|entrypoint.sh|init|sudo|sshd|vminitd|login|getty) continue ;;
+        esac
+        rss_kb=$(awk '/^VmRSS:/ {print $2}' "$d/status" 2>/dev/null) || continue
+        [ -z "$rss_kb" ] && continue
+        [ "$rss_kb" -lt 10000 ] 2>/dev/null && continue
+        echo "$pid $rss_kb $comm"
+    done | sort -k2 -rn | head -5 | awk '{print $1}'
+}
+
+THROTTLED=()
+THROTTLING=false
+
+throttle() {
+    # Drop caches first — may free enough without stopping anything
+    sync
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+
+    for pid in $(heavy_pids); do
+        if kill -STOP "$pid" 2>/dev/null; then
+            THROTTLED+=("$pid")
+            local c
+            c=$(cat "/proc/$pid/comm" 2>/dev/null || echo "?")
+            log "STOP pid=$pid ($c)"
+        fi
+    done
+    THROTTLING=true
+}
+
+unthrottle() {
+    for pid in "${THROTTLED[@]}"; do
+        if kill -CONT "$pid" 2>/dev/null; then
+            local c
+            c=$(cat "/proc/$pid/comm" 2>/dev/null || echo "?")
+            log "CONT pid=$pid ($c)"
+        fi
+    done
+    THROTTLED=()
+    THROTTLING=false
+}
+
+# Clean up on exit — resume any stopped processes
+trap 'unthrottle' EXIT
+
+log "started (crit=${MEM_CRIT_MB}MB resume=${MEM_RESUME_MB}MB poll=${POLL}s)"
+
+while true; do
+    mem=$(mem_avail_mb)
+
+    if [ "$mem" -lt "$MEM_CRIT_MB" ] && [ "$THROTTLING" = false ]; then
+        log "CRITICAL ${mem}MB available — throttling"
+        throttle
+    elif [ "$mem" -gt "$MEM_RESUME_MB" ] && [ "$THROTTLING" = true ]; then
+        log "RECOVERED ${mem}MB available — resuming"
+        unthrottle
+    fi
+
+    sleep "$POLL"
+done
+WATCHDOG_SCRIPT
+RUN chmod +x /usr/local/bin/vm-watchdog.sh
+
+# ─── watchdog-status command ─────────────────────────────────────────────────
+
+RUN cat > /etc/profile.d/vm-watchdog-status.sh << 'WATCHDOG_STATUS'
+watchdog-status() {
+    echo "─── Memory ───"
+    awk '/^MemTotal:|^MemAvailable:|^SwapTotal:|^SwapFree:/ {
+        printf "  %-16s %6d MB\n", $1, $2/1024
+    }' /proc/meminfo
+    echo "─── Swap ───"
+    swapon --show 2>/dev/null || echo "  (none)"
+    echo "─── Watchdog Log (last 15) ───"
+    tail -15 /var/log/vm-watchdog.log 2>/dev/null || echo "  (no log yet)"
+}
+WATCHDOG_STATUS
+
 USER claude
 WORKDIR /home/claude
 
@@ -224,11 +353,14 @@ if [ -z "$WELCOMED" ]; then
     echo "║                                                         ║"
     echo "║  Before yarn/npm install, run: nm-local                 ║"
     echo "║  (moves node_modules to native fs — avoids virtio-fs)   ║"
+    echo "║                                                         ║"
+    echo "║  VM health: watchdog-status                             ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
 fi
 BASHRC
 
-# ─── Default command ─────────────────────────────────────────────────────────
+# ─── Default command (runs as root for swap/watchdog; shell.sh enters as claude) ─
 
-CMD ["sleep", "infinity"]
+USER root
+CMD ["/usr/local/bin/entrypoint.sh"]
