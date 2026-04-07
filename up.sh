@@ -187,7 +187,9 @@ else
   # Dotfiles — stage into temp dir and mount read-only
   DOTFILES_STAGE=""
   if [ -n "$DOTFILES" ]; then
-    DOTFILES_STAGE=$(mktemp -d)
+    DOTFILES_STAGE="$SCRIPT_DIR/.stage-dotfiles"
+    rm -rf "$DOTFILES_STAGE"
+    mkdir -p "$DOTFILES_STAGE"
     for df in ${DOTFILES//,/ }; do
       df="${df/#\~/$HOME}"
       # Derive the relative path under $HOME (e.g. ~/.ssh → .ssh)
@@ -210,7 +212,9 @@ else
   # Copy folders — stage into temp dir and mount read-only
   COPY_FOLDERS_STAGE=""
   if [ -n "$COPY_FOLDERS" ]; then
-    COPY_FOLDERS_STAGE=$(mktemp -d)
+    COPY_FOLDERS_STAGE="$SCRIPT_DIR/.stage-copyfolders"
+    rm -rf "$COPY_FOLDERS_STAGE"
+    mkdir -p "$COPY_FOLDERS_STAGE"
     for cf in ${COPY_FOLDERS//,/ }; do
       cf="${cf/#\~/$HOME}"
       # Derive the relative path under $HOME (e.g. ~/Development/Foo → Development/Foo)
@@ -267,8 +271,6 @@ if [ -n "$DOTFILES" ]; then
       fi
     fi
   ' 2>/dev/null
-  # Clean up staging directory
-  [ -n "$DOTFILES_STAGE" ] && rm -rf "$DOTFILES_STAGE"
   ok
 else
   CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -291,8 +293,6 @@ if [ -n "$COPY_FOLDERS" ]; then
       done
     fi
   '
-  # Clean up staging directory
-  [ -n "$COPY_FOLDERS_STAGE" ] && rm -rf "$COPY_FOLDERS_STAGE"
   ok
 else
   CURRENT_STEP=$((CURRENT_STEP + 1))
