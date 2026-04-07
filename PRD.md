@@ -158,10 +158,11 @@ Base: `alpine:latest` (ARM64)
 
 Layers:
 1. System packages: `nodejs`, `npm`, `yarn`, `git`, `curl`, `build-base`, `chromium`, `python3`, `bash`, `sudo`, `openssh-client`, `vim`, `wget`
-2. Global npm packages (as root): `@anthropic-ai/claude-code`, `claude-flow@alpha`
-3. User: `claude` with passwordless sudo
+2. User: `claude` with passwordless sudo
+3. Claude Code native binary (installed on first login via `/etc/profile.d/claude-code.sh`)
 4. Playwright config (using Alpine's native `chromium` package)
 5. Shell configuration + welcome banner
+6. VM watchdog + entrypoint (swap setup, memory monitor, process throttler)
 
 Note: Node.js is installed via Alpine's native `nodejs` package (not nvm). nvm attempts to compile from source on musl/Alpine which fails. Alpine's package is prebuilt for ARM64.
 
@@ -179,8 +180,12 @@ No SSH server needed — `container exec` provides direct shell access.
 | `EXTRA_PACKAGES` | _(none)_ | Space-separated Alpine packages, auto-installed on every `up.sh` (survives destroy + recreate) |
 | `DOTFILES` | _(none)_ | Comma-separated host paths (e.g. `~/.ssh,~/.gitconfig`) copied into `/home/claude` on every `up.sh` (survives destroy --all) |
 | `COPY_FOLDERS` | _(none)_ | Comma-separated project folders (e.g. `~/Development/MyProject`) copied into `/home/claude` on every `up.sh` (node_modules excluded, survives destroy --all) |
+| `SWAP_SIZE` | `2G` | Size of the ext4 sparse image used for swap (ceiling for dynamic growth) |
+| `WATCHDOG_MEM_CRIT_MB` | `400` | Available memory (MB) below which the watchdog SIGSTOPs heavy processes |
+| `WATCHDOG_MEM_RESUME_MB` | `1200` | Available memory (MB) above which throttled processes are resumed |
+| `WATCHDOG_POLL` | `5` | Watchdog poll interval in seconds |
 
-Note: Memory and CPU are set at container creation time. Changing them requires `destroy` + `up` (not just stop/start). Disk is sparse and does not need configuration.
+Note: Memory and CPU are set at container creation time. Changing them requires `destroy` + `up` (not just stop/start). Disk is sparse and does not need configuration. Watchdog/swap defaults are sized for the default 8G VM — tune if you change `VM_MEMORY`.
 
 #### FR-4: Container Access
 
@@ -236,14 +241,14 @@ The Containerfile bakes in the full environment. No separate `provision.sh` need
 
 - `claude` user with passwordless sudo
 - Node.js 24 (Alpine native package, not nvm)
-- Claude Code (`@anthropic-ai/claude-code`)
-- claude-flow (`claude-flow@alpha`)
+- Claude Code native binary (installed on first login via profile.d script — avoids builder VM OOM)
 - Playwright + Chromium (Alpine native package)
 - Git, vim, curl, wget, build-base, python3
 - SSH agent auto-start in `.bashrc`
 - Host SSH agent forwarding (via `--ssh` flag)
 - Welcome banner with auth instructions
-- Container stays alive via `sleep infinity` (shell access via `container exec`)
+- Entrypoint sets up swap and starts VM watchdog, then `sleep infinity` (shell access via `container exec`)
+- VM watchdog monitors memory, grows swap dynamically, throttles/kills processes on exhaustion
 
 ## Developer Experience
 
@@ -333,7 +338,7 @@ claude-apple-container/
 |---|---|---|
 | 1 | Is `container` CLI available via Homebrew? | No — signed `.pkg` installer from GitHub releases only |
 | 2 | Does nvm work on Alpine? | No — nvm tries to compile Node.js from source on musl, fails. Use Alpine's native `nodejs` package instead |
-| 3 | Does the container stay alive in detached mode? | `bash -l` exits immediately. Use `sleep infinity` as CMD, access via `container exec` |
+| 3 | Does the container stay alive in detached mode? | `bash -l` exits immediately. Entrypoint script sets up swap, starts watchdog, then `exec sleep infinity`. Access via `container exec` |
 | 4 | Does `container system start` need manual setup? | Yes — requires kernel install on first run. `up.sh` handles this with `--enable-kernel-install` flag |
 | 5 | What is the `container run` flag syntax for memory/CPU limits? | `-m 8G` and `-c 4`. Apple default is 1 GiB which OOM-kills Claude Code. We default to 8G/4 CPUs. Memory/CPU are set at creation time only — changing requires destroy + recreate |
 | 6 | Does disk need pre-allocation? | No — Apple Containers uses sparse EXT4 files (~512 GiB apparent, only actual bytes on host disk). No `--disk-size` flag exists |
@@ -343,6 +348,7 @@ claude-apple-container/
 | # | Question | Impact |
 |---|---|---|
 | 1 | Does the Playwright + Alpine chromium workaround function correctly on ARM64 in Apple Containers? | May require fallback to Wolfi OS |
+| 2 | Does swap on ext4-on-loop-on-virtio-fs work reliably under heavy load? | If swapon fails, the entrypoint silently continues and the watchdog provides protection via process throttling/killing only |
 
 ## Caveats
 
@@ -356,6 +362,9 @@ claude-apple-container/
 - **Memory/CPU require recreate** — these are set at container creation time. Changing `VM_MEMORY` or `VM_CPUS` requires `destroy` + `up` (named volume preserves `/home/claude` data)
 - **virtio-fs cannot handle node_modules** — all filesystems (rootfs, volumes, shared folders) use virtio-fs, which fails on deeply nested symlink-heavy directories. Workaround: `yarn`/`npm` wrappers in `/etc/profile.d/nm-local.sh` automatically relocate `node_modules` to a loop-mounted ext4 sparse image (`~/.nm-local.img`). Persists across restarts
 - **Dotfiles persistence** — `DOTFILES` in `.env` copies host files (e.g. `~/.ssh,~/.gitconfig`) into `/home/claude` on every `up.sh`, surviving `destroy --all`
+- **VM watchdog** — background daemon monitors memory every 5s. Escalation ladder: grow swap dynamically (256MB chunks) → SIGSTOP heavy processes → SIGTERM after 30s → SIGKILL after 40s. Check `watchdog-status` inside the container for current state. Log: `/var/log/vm-watchdog.log`
+- **Swap is ext4-on-loop-on-virtio-fs** — follows the same proven pattern as nm-local. Initial 256MB swapfile, grown dynamically by the watchdog up to `SWAP_SIZE` (default 2G). Growth stops if host disk drops below 2GB free. Swap files persist across stop/start; recreated on destroy
+- **Claude Code installed at runtime** — the native binary is installed on first login via profile.d script, not baked into the image (builder VM OOM-kills during install). First shell session takes ~30s longer
 
 ## Future Enhancements (v2+)
 

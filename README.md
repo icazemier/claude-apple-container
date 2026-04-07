@@ -6,8 +6,7 @@ A Claude Code development environment running in Apple's native Containerization
 
 - **Alpine Linux** (~5 MB base, ARM64)
 - **Node.js 24** + npm + yarn (Alpine native packages)
-- **Claude Code** (`@anthropic-ai/claude-code`)
-- **claude-flow** orchestrator (`claude-flow@alpha`)
+- **Claude Code** (native binary, installed on first login)
 - **Playwright** with Chromium (Alpine native build)
 - **Native module build deps**: cairo, pango, pixman, libjpeg, giflib, librsvg (for packages like `canvas`)
 - **Dev tools**: git, curl, wget, vim, python3, build-base (gcc/make/etc.), openssh-client
@@ -48,7 +47,7 @@ First run builds the container image (takes a few minutes). Subsequent starts ta
 **Inside the container:**
 ```bash
 claude           # Launch Claude Code
-claude-flow      # Launch claude-flow orchestrator
+watchdog-status  # Check VM memory/swap health
 ```
 
 ## Authenticate Claude Code
@@ -90,8 +89,12 @@ cp .env.example .env
 | `EXTRA_PACKAGES` | _(none)_ | Space-separated Alpine packages, installed on every `./up.sh` |
 | `DOTFILES` | _(none)_ | Comma-separated host paths to restore into `/home/claude` on every `./up.sh` |
 | `COPY_FOLDERS` | _(none)_ | Comma-separated project folders to copy into `/home/claude` on every `./up.sh` |
+| `SWAP_SIZE` | `2G` | Swap ext4 image size (ceiling for dynamic growth) |
+| `WATCHDOG_MEM_CRIT_MB` | `400` | Memory (MB) below which watchdog throttles processes |
+| `WATCHDOG_MEM_RESUME_MB` | `1200` | Memory (MB) above which throttled processes resume |
+| `WATCHDOG_POLL` | `5` | Watchdog poll interval in seconds |
 
-Changes take effect after `./stop.sh && ./up.sh`.
+Changes take effect after `./stop.sh && ./up.sh`. Watchdog/swap defaults are sized for the default 8G VM.
 
 **Important:** Memory and CPU are set at container creation time. Changing `VM_MEMORY` or `VM_CPUS` requires `./destroy.sh && ./up.sh` (not just stop/start). Your `/home/claude` data is preserved on the named volume.
 
@@ -233,6 +236,28 @@ FORWARDED_PORTS=3000,3001,5173
 
 Services are reachable at `localhost:<port>` on the host.
 
+## VM Watchdog
+
+The container includes a background watchdog that prevents the VM from freezing under memory pressure. It runs automatically — no setup needed.
+
+**Escalation ladder:**
+
+1. **Swap growth** — starts with 256MB swap, grows in 256MB chunks as needed (up to `SWAP_SIZE`, default 2G). Stops growing if host disk drops below 2GB free.
+2. **SIGSTOP** — when available memory drops below `WATCHDOG_MEM_CRIT_MB` (400MB), the heaviest processes are paused and page caches are dropped.
+3. **SIGTERM** — if memory doesn't recover after 30s, the heaviest paused process is resumed and sent SIGTERM (graceful kill).
+4. **SIGKILL** — if SIGTERM doesn't help after 10 more seconds, SIGKILL is sent. The cycle repeats for the next heaviest process.
+5. **Resume** — when available memory recovers above `WATCHDOG_MEM_RESUME_MB` (1200MB), all paused processes are resumed.
+
+**Monitoring:**
+
+```bash
+./shell.sh
+watchdog-status                   # quick overview: memory, swap files, recent log
+cat /var/log/vm-watchdog.log      # full history
+```
+
+Swap files persist across stop/start and are re-activated on boot. They are lost on `destroy` (recreated automatically on next `up.sh`).
+
 ## Resources
 
 The default 8G RAM / 4 CPUs is suitable for Claude Code + Chromium. Apple's own default (1 GiB) is too low and causes OOM kills.
@@ -282,11 +307,24 @@ container system start --enable-kernel-install
 **Shared folder not appearing:**
 Ensure `SHARED_FOLDER` is set in `.env` and points to an existing directory before running `./up.sh`. The variable must be set when creating the container (not when starting an existing one).
 
-**npm packages not installed:**
-Global npm packages are installed as root in the Containerfile. To reinstall manually:
+**Claude Code not found on first login:**
+The native binary is installed on first login (~30s). If it fails, install manually:
 ```bash
 ./shell.sh
-sudo npm install -g @anthropic-ai/claude-code claude-flow@alpha
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+**Container hangs or is unresponsive:**
+The VM watchdog should prevent most hangs. If the container is stuck:
+```bash
+./stop.sh     # tiered escalation: graceful → force kill → VM process kill
+./up.sh       # restart
+```
+Check what happened:
+```bash
+./shell.sh
+watchdog-status   # memory, swap, recent watchdog actions
+cat /var/log/vm-watchdog.log   # full watchdog history
 ```
 
 **Chromium/Playwright issues:**
@@ -308,6 +346,7 @@ echo $PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH   # should be /usr/bin/chromium-browse
 | Shared folders | Bind mount from host |
 | Networking | Dedicated IP per container |
 | State | Named volume (`claude-home`) for `/home/claude` |
+| Swap | ext4 sparse image, dynamically grown by watchdog |
 | Shell access | `container exec` (no SSH server needed) |
 
 ## How It Works
@@ -332,7 +371,6 @@ Unlike Docker Desktop (which runs many containers inside one large Linux VM), ea
 - [Apple Containerization framework](https://github.com/apple/containerization)
 - [Meet Containerization — WWDC25](https://developer.apple.com/videos/play/wwdc2025/346/)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)
-- [claude-flow](https://github.com/ruvnet/claude-flow)
 - [Alpine Linux](https://alpinelinux.org/)
 
 ## Related Projects
