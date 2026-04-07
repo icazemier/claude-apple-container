@@ -143,18 +143,23 @@ RUN cat > /usr/local/bin/entrypoint.sh << 'ENTRYPOINT_SCRIPT'
 #!/bin/bash
 set -e
 
-# ─── Swap (loop-mounted sparse file — bypasses virtio-fs) ───────────────────
+# ─── Swap (ext4 on loop device — same proven pattern as nm-local) ────────────
 SWAP_IMG=/var/swap.img
+SWAP_MNT=/mnt/swap
 SWAP_SIZE="${SWAP_SIZE:-2G}"
 if ! swapon --show --noheadings 2>/dev/null | grep -q .; then
     if [ ! -f "$SWAP_IMG" ]; then
         truncate -s "$SWAP_SIZE" "$SWAP_IMG"
+        mkfs.ext4 -q -m 0 "$SWAP_IMG"
     fi
-    SWAP_LOOP=$(losetup -f 2>/dev/null) || true
-    if [ -n "$SWAP_LOOP" ]; then
-        losetup "$SWAP_LOOP" "$SWAP_IMG" 2>/dev/null || true
-        mkswap -q "$SWAP_LOOP" >/dev/null 2>&1 || true
-        if swapon "$SWAP_LOOP" 2>/dev/null; then
+    mkdir -p "$SWAP_MNT"
+    if mount -o loop "$SWAP_IMG" "$SWAP_MNT" 2>/dev/null; then
+        if [ ! -f "$SWAP_MNT/swapfile" ]; then
+            dd if=/dev/zero of="$SWAP_MNT/swapfile" bs=1M count=2048 status=none 2>/dev/null
+            chmod 600 "$SWAP_MNT/swapfile"
+            mkswap -q "$SWAP_MNT/swapfile" >/dev/null 2>&1
+        fi
+        if swapon "$SWAP_MNT/swapfile" 2>/dev/null; then
             echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
         fi
     fi
