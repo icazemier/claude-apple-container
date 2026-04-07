@@ -34,18 +34,26 @@ RUN python3 -m venv /opt/az \
     && /opt/az/bin/pip install --quiet azure-cli \
     && ln -s /opt/az/bin/az /usr/local/bin/az
 
-# ─── Global npm packages (as root, before user switch) ───────────────────────
-
-RUN npm install -g \
-    @anthropic-ai/claude-code \
-    claude-flow@alpha
-
 # ─── Create claude user ──────────────────────────────────────────────────────
 
 RUN adduser -D -s /bin/bash -h /home/claude claude \
     && echo "claude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/claude \
     && chmod 0440 /etc/sudoers.d/claude
 
+# ─── Claude Code native binary ──────────────────────────────────────────────
+# Installed at runtime (not build time) because the binary's install
+# subcommand OOM-kills in the resource-constrained builder VM.
+# The profile.d script below installs on first login and adds to PATH.
+
+RUN cat > /etc/profile.d/claude-code.sh << 'CLAUDE_CODE'
+export PATH="$HOME/.local/bin:$PATH"
+
+# Install native Claude Code binary on first login if missing
+if [ ! -x "$HOME/.local/bin/claude" ]; then
+    echo "Installing Claude Code native binary..."
+    curl -fsSL https://claude.ai/install.sh | bash
+fi
+CLAUDE_CODE
 
 # ─── nm-local: work around virtio-fs node_modules issue ──────────────────────
 # Placed in /etc/profile.d/ so it survives volume mounts over /home/claude.
@@ -210,7 +218,6 @@ if [ -z "$WELCOMED" ]; then
     echo "║                                                         ║"
     echo "║  Available tools:                                       ║"
     echo "║    claude         Claude Code CLI                       ║"
-    echo "║    claude-flow    Multi-agent orchestrator               ║"
     echo "║    az             Azure CLI                             ║"
     echo "║    node           $(node --version 2>/dev/null || echo 'not found')                              ║"
     echo "║    git            $(git --version 2>/dev/null | cut -d' ' -f3 || echo 'not found')                            ║"
