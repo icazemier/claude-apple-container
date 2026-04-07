@@ -161,12 +161,40 @@ fi
 
 # ─── Step 4: Start container ─────────────────────────────────────────────────
 
-# If container exists but is stopped, start it
+# ─── Timeout helper ──────────────────────────────────────────────────────────
+
+START_TIMEOUT=${START_TIMEOUT:-30}
+
+run_with_timeout() {
+  local timeout=$1; shift
+  "$@" &
+  local pid=$!
+  ( sleep "$timeout" && kill "$pid" 2>/dev/null ) &
+  local watchdog=$!
+  if wait "$pid" 2>/dev/null; then
+    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    return 0
+  else
+    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    return 1
+  fi
+}
+
+# If container exists but is stopped, try to start it; if it fails
+# (e.g. stale mounts from a previous run), destroy and recreate.
 if [ "$STATE" = "stopped" ] || [ "$STATE" = "created" ]; then
   step "Starting existing container..."
-  container start "$CONTAINER_NAME"
-  ok
-else
+  if run_with_timeout "$START_TIMEOUT" container start "$CONTAINER_NAME" 2>/dev/null; then
+    ok
+  else
+    fail "stale config — recreating"
+    container rm -f "$CONTAINER_NAME" &>/dev/null || true
+    CURRENT_STEP=$((CURRENT_STEP - 1))
+    STATE=""
+  fi
+fi
+
+if [ -z "$STATE" ]; then
   # Create and run new container
   step "Starting new container..."
 
