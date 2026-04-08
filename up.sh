@@ -119,9 +119,19 @@ ok
 
 # ─── Ensure container system is running ───────────────────────────────────────
 
-if ! container system info &>/dev/null; then
+if ! container system status 2>/dev/null | grep -qw "running"; then
   step "Starting container system..."
   container system start --enable-kernel-install
+  # Wait for the API server to become responsive
+  RETRIES=0
+  while ! container image ls &>/dev/null && [ $RETRIES -lt 15 ]; do
+    sleep 1
+    RETRIES=$((RETRIES + 1))
+  done
+  if [ $RETRIES -ge 15 ]; then
+    fail "API server did not become ready"
+    die "Try: container system stop && container system start"
+  fi
   ok
 else
   CURRENT_STEP=$((CURRENT_STEP + 1))
