@@ -196,7 +196,7 @@ while [ "$IMAGE_READY" = false ] && [ $API_ATTEMPT -lt $MAX_API_ATTEMPTS ]; do
     continue
   fi
 
-  if echo "$img_output" | grep -q "$IMAGE_NAME"; then
+  if echo "$img_output" | grep -q "${IMAGE_NAME%%:*}"; then
     step "Image exists..."
     ok "skipping build"
     IMAGE_READY=true
