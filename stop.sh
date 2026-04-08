@@ -123,12 +123,32 @@ diagnose_container() {
   echo ""
 }
 
+# ─── Ensure API is responsive ─────────────────────────────────────────────────
+
+api_healthy() {
+  ! container image ls 2>&1 | grep -qi "unavailable\|transport.*inactive"
+}
+
+if ! api_healthy; then
+  echo "==> Container system unresponsive — restarting..."
+  container system stop &>/dev/null || true
+  container system start --enable-kernel-install &>/dev/null
+  RETRIES=0
+  while ! api_healthy && [ $RETRIES -lt 15 ]; do sleep 1; RETRIES=$((RETRIES + 1)); done
+fi
+
 # ─── Stop container ──────────────────────────────────────────────────────────
 
 STATE=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
 
 if [ "$STATE" != "running" ]; then
-  echo "Container is not running ($CONTAINER_NAME)"
+  # API might be stale — check for an orphaned VM process before giving up
+  if kill_vm_process "$CONTAINER_NAME"; then
+    echo "Killed orphaned VM process (API was unresponsive)."
+    container rm -f "$CONTAINER_NAME" &>/dev/null || true
+  else
+    echo "Container is not running ($CONTAINER_NAME)"
+  fi
   exit 0
 fi
 

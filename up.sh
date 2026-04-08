@@ -117,22 +117,44 @@ fi
 
 ok
 
-# ─── Ensure container system is running ───────────────────────────────────────
+# ─── Ensure container system is running and API is responsive ─────────────────
+
+api_healthy() {
+  # container CLI returns exit 0 even on transport errors — check stderr
+  ! container image ls 2>&1 | grep -qi "unavailable\|transport.*inactive"
+}
+
+wait_for_api() {
+  local retries=0
+  while ! api_healthy && [ $retries -lt 15 ]; do
+    sleep 1
+    retries=$((retries + 1))
+  done
+  [ $retries -lt 15 ]
+}
+
+start_system() {
+  container system stop &>/dev/null || true
+  container system start --enable-kernel-install
+  wait_for_api
+}
 
 if ! container system status 2>/dev/null | grep -qw "running"; then
   step "Starting container system..."
-  container system start --enable-kernel-install
-  # Wait for the API server to become responsive
-  RETRIES=0
-  while ! container image ls &>/dev/null && [ $RETRIES -lt 15 ]; do
-    sleep 1
-    RETRIES=$((RETRIES + 1))
-  done
-  if [ $RETRIES -ge 15 ]; then
+  if start_system; then
+    ok
+  else
     fail "API server did not become ready"
     die "Try: container system stop && container system start"
   fi
-  ok
+elif ! api_healthy; then
+  step "Restarting container system (stale API)..."
+  if start_system; then
+    ok
+  else
+    fail "API server did not become ready after restart"
+    die "Try: container system stop && container system start"
+  fi
 else
   CURRENT_STEP=$((CURRENT_STEP + 1))
 fi
@@ -155,7 +177,15 @@ fi
 if ! container image ls 2>/dev/null | grep -q "$IMAGE_NAME"; then
   step "Building container image..."
   echo ""
-  container build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+  if ! container build -t "$IMAGE_NAME" "$SCRIPT_DIR"; then
+    # Transport may have died mid-build — restart and retry once
+    printf "  ${YELLOW}Build failed — restarting container system and retrying...${NC}\n"
+    if start_system; then
+      container build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    else
+      die "Container system did not recover"
+    fi
+  fi
   printf "  ${GREEN}✓ Image built${NC}\n"
 else
   step "Image exists..."

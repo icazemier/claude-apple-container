@@ -92,11 +92,30 @@ diagnose_container() {
   echo ""
 }
 
+# ─── Ensure API is responsive ─────────────────────────────────────────────────
+
+api_healthy() {
+  ! container image ls 2>&1 | grep -qi "unavailable\|transport.*inactive"
+}
+
+if ! api_healthy; then
+  echo "==> Container system unresponsive — restarting..."
+  container system stop &>/dev/null || true
+  container system start --enable-kernel-install &>/dev/null
+  RETRIES=0
+  while ! api_healthy && [ $RETRIES -lt 15 ]; do sleep 1; RETRIES=$((RETRIES + 1)); done
+fi
+
 # ─── Stop container if running ────────────────────────────────────────────────
 
 STATE=$(container inspect "$CONTAINER_NAME" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
 
-if [ "$STATE" = "running" ]; then
+if [ -z "$STATE" ]; then
+  # API might still be dead or container unknown — check for orphaned VM
+  if kill_vm_process "$CONTAINER_NAME"; then
+    echo "==> Killed orphaned VM process."
+  fi
+elif [ "$STATE" = "running" ]; then
   echo "==> Container is running — stopping first..."
   if run_with_timeout "$STOP_TIMEOUT" container stop -t 5 "$CONTAINER_NAME" 2>/dev/null; then
     true
@@ -116,10 +135,8 @@ fi
 
 # ─── Remove container ────────────────────────────────────────────────────────
 
-if [ -n "$STATE" ]; then
-  echo "==> Removing container $CONTAINER_NAME..."
-  container rm -f "$CONTAINER_NAME" 2>/dev/null || true
-fi
+echo "==> Removing container $CONTAINER_NAME..."
+container rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 # ─── Clean up staging directories ────────────────────────────────────────────
 
