@@ -140,6 +140,7 @@ wait_for_api() {
 
 start_system() {
   container system stop &>/dev/null || true
+  sleep 3  # let daemon processes fully exit before restarting
   container system start --enable-kernel-install
   wait_for_api
 }
@@ -178,24 +179,45 @@ fi
 
 # ─── Step 2: Build image (if needed) ─────────────────────────────────────────
 
-# Check if image exists
-if ! container image ls 2>/dev/null | grep -q "$IMAGE_NAME"; then
+MAX_API_ATTEMPTS=3
+API_ATTEMPT=0
+IMAGE_READY=false
+
+while [ "$IMAGE_READY" = false ] && [ $API_ATTEMPT -lt $MAX_API_ATTEMPTS ]; do
+  # Check if image exists — distinguish "not found" from "API broken"
+  img_output=$(container image ls 2>&1)
+  if echo "$img_output" | grep -qi "unavailable\|transport.*inactive"; then
+    API_ATTEMPT=$((API_ATTEMPT + 1))
+    if [ $API_ATTEMPT -ge $MAX_API_ATTEMPTS ]; then
+      die "Container API did not recover after $MAX_API_ATTEMPTS restart attempts"
+    fi
+    step "Restarting container system (attempt $API_ATTEMPT/$MAX_API_ATTEMPTS)..."
+    if start_system; then ok; else fail; die "Container system did not recover"; fi
+    continue
+  fi
+
+  if echo "$img_output" | grep -q "$IMAGE_NAME"; then
+    step "Image exists..."
+    ok "skipping build"
+    IMAGE_READY=true
+    continue
+  fi
+
+  # Image genuinely doesn't exist — build it
   step "Building container image..."
   echo ""
-  if ! container build -t "$IMAGE_NAME" "$SCRIPT_DIR"; then
-    # Transport may have died mid-build — restart and retry once
-    printf "  ${YELLOW}Build failed — restarting container system and retrying...${NC}\n"
-    if start_system; then
-      container build -t "$IMAGE_NAME" "$SCRIPT_DIR"
-    else
-      die "Container system did not recover"
+  if container build -t "$IMAGE_NAME" "$SCRIPT_DIR"; then
+    printf "  ${GREEN}✓ Image built${NC}\n"
+    IMAGE_READY=true
+  else
+    API_ATTEMPT=$((API_ATTEMPT + 1))
+    if [ $API_ATTEMPT -ge $MAX_API_ATTEMPTS ]; then
+      die "Image build failed after $MAX_API_ATTEMPTS attempts"
     fi
+    printf "  ${YELLOW}Build failed — restarting container system (attempt $API_ATTEMPT/$MAX_API_ATTEMPTS)...${NC}\n"
+    start_system || die "Container system did not recover"
   fi
-  printf "  ${GREEN}✓ Image built${NC}\n"
-else
-  step "Image exists..."
-  ok "skipping build"
-fi
+done
 
 # ─── Step 3: Create volume (if needed) ────────────────────────────────────────
 

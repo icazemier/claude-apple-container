@@ -23,6 +23,7 @@ api_healthy() {
 if ! api_healthy; then
   echo "Container system unresponsive — restarting..."
   container system stop &>/dev/null || true
+  sleep 3
   container system start --enable-kernel-install &>/dev/null
   RETRIES=0; CONSECUTIVE=0
   while [ $CONSECUTIVE -lt 3 ] && [ $RETRIES -lt 30 ]; do
