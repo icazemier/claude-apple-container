@@ -125,12 +125,17 @@ api_healthy() {
 }
 
 wait_for_api() {
-  local retries=0
-  while ! api_healthy && [ $retries -lt 15 ]; do
+  local retries=0 consecutive=0
+  while [ $consecutive -lt 3 ] && [ $retries -lt 30 ]; do
+    if api_healthy; then
+      consecutive=$((consecutive + 1))
+    else
+      consecutive=0
+    fi
     sleep 1
     retries=$((retries + 1))
   done
-  [ $retries -lt 15 ]
+  [ $consecutive -ge 3 ]
 }
 
 start_system() {
