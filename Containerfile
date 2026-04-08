@@ -369,6 +369,10 @@ watchdog-status() {
 }
 WATCHDOG_STATUS
 
+# ─── MCP servers (globally available for Claude Code) ───────────────────────
+
+RUN npm install -g @azure-devops/mcp @playwright/mcp
+
 USER claude
 WORKDIR /home/claude
 
