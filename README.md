@@ -8,6 +8,7 @@ A Claude Code development environment running in Apple's native Containerization
 - **Node.js 24** + npm + yarn (Alpine native packages)
 - **Claude Code** (native binary, installed on first login)
 - **Playwright** with Chromium (Alpine native build)
+- **MCP servers**: `@azure-devops/mcp`, `@playwright/mcp` (globally installed)
 - **Native module build deps**: cairo, pango, pixman, libjpeg, giflib, librsvg (for packages like `canvas`)
 - **Dev tools**: git, curl, wget, vim, python3, build-base (gcc/make/etc.), openssh-client
 
