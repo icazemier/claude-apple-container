@@ -294,6 +294,41 @@ VM_CPUS=8
 ./up.sh
 ```
 
+## Apple Container CLI Quirks
+
+The `container` CLI (v0.10.0) has several non-obvious behaviors that the scripts work around. Documented here so you don't have to rediscover them.
+
+### gRPC transport errors return exit 0
+
+The CLI communicates with its daemon over gRPC. When the transport dies, commands like `container image ls` print `Error: unavailable (14): Transport became inactive` to **stderr** but still return **exit code 0**. This means you can't rely on exit codes to detect failures — you must check stderr for error strings.
+
+All scripts use an `api_healthy()` function that greps the combined output for `unavailable` or `transport.*inactive` instead of trusting the exit code.
+
+### Image list uses space-separated columns
+
+`container image ls` outputs name and tag in separate columns:
+
+```
+NAME                    TAG     DIGEST
+claude-apple-container  latest  42155aa750a6...
+```
+
+It does **not** use the `name:tag` format (e.g. `claude-apple-container:latest`). Grepping for `name:tag` will never match. The scripts strip the tag and grep for the name only.
+
+### Transport goes stale after stop/start cycles
+
+After stopping a container (or after the Mac sleeps), the daemon's gRPC transport can become permanently stale. `container system status` reports `running` but every API call fails. The only fix is a full system restart (`container system stop && container system start`).
+
+The scripts detect this automatically and restart the system when needed. They also add a 3-second pause between stop and start — without it, the new daemon can overlap with the dying one and come up broken.
+
+### Transport can flap after restart
+
+After a system restart, the API may respond successfully for one or two calls and then fail again. A single health check probe isn't reliable. The scripts require **3 consecutive** successful probes within 30 seconds before trusting the API.
+
+### Orphaned VM processes
+
+If the daemon dies while a container VM is running, the VM process becomes orphaned — invisible to the `container` CLI but still consuming resources. `stop.sh` and `destroy.sh` detect this by looking for `container-runtime-linux` processes and killing them directly when the API can't confirm container state.
+
 ## Troubleshooting
 
 **`container` CLI not found:**
