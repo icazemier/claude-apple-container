@@ -125,7 +125,7 @@ elif [ "$STATE" = "running" ]; then
     true
   else
     echo "==> Graceful stop timed out, collecting diagnostics..."
-    diagnose_container "$CONTAINER_NAME"
+    diagnose_container "$CONTAINER_NAME" || true
     if run_with_timeout "$STOP_TIMEOUT" container kill "$CONTAINER_NAME" 2>/dev/null; then
       echo "==> Force killed."
     elif kill_vm_process "$CONTAINER_NAME"; then

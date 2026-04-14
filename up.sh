@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 CURRENT_STEP=0
 
 die() { printf "${RED}ERROR:${NC} %s\n" "$*" >&2; exit 1; }
@@ -308,28 +308,16 @@ if [ -z "$STATE" ]; then
     RUN_ARGS+=(-v "${DOTFILES_STAGE}:/mnt/dotfiles:ro")
   fi
 
-  # Copy folders — stage into temp dir and mount read-only
-  COPY_FOLDERS_STAGE=""
+  # Copy folders — mount source paths directly (read-only)
   if [ -n "$COPY_FOLDERS" ]; then
-    COPY_FOLDERS_STAGE="$SCRIPT_DIR/.stage-copyfolders"
-    rm -rf "$COPY_FOLDERS_STAGE"
-    mkdir -p "$COPY_FOLDERS_STAGE"
+    idx=0
     for cf in ${COPY_FOLDERS//,/ }; do
       cf="${cf/#\~/$HOME}"
-      # Derive the relative path under $HOME (e.g. ~/Development/Foo → Development/Foo)
-      rel="${cf#$HOME/}"
-      if [ "$rel" = "$cf" ]; then
-        rel="$(basename "$cf")"
-      fi
-      mkdir -p "$COPY_FOLDERS_STAGE/$rel"
-      # Use rsync to copy but exclude node_modules (they'll go to tmpfs anyway)
-      if command -v rsync &>/dev/null; then
-        rsync -a --exclude='node_modules' --exclude='.node_modules.old.*' "$cf/" "$COPY_FOLDERS_STAGE/$rel/"
-      else
-        cp -a "$cf/." "$COPY_FOLDERS_STAGE/$rel/"
+      if [ -d "$cf" ]; then
+        RUN_ARGS+=(-v "${cf}:/mnt/copy_folders/${idx}:ro")
+        idx=$((idx + 1))
       fi
     done
-    RUN_ARGS+=(-v "${COPY_FOLDERS_STAGE}:/mnt/copy_folders:ro")
   fi
 
   # Watchdog / swap env vars
@@ -387,18 +375,26 @@ fi
 
 if [ -n "$COPY_FOLDERS" ]; then
   step "Copying project folders..."
+  # Pass folder names so the VM knows what to name each copy
+  COPY_NAMES=""
+  for cf in ${COPY_FOLDERS//,/ }; do
+    cf="${cf/#\~/$HOME}"
+    COPY_NAMES="${COPY_NAMES:+$COPY_NAMES,}$(basename "$cf")"
+  done
   container exec "$CONTAINER_NAME" bash -c '
-    if [ -d /mnt/copy_folders ]; then
-      cd /mnt/copy_folders
-      find . -mindepth 1 -maxdepth 1 -type d | while read -r d; do
-        dest="$HOME/$d"
-        if [ ! -d "$dest" ]; then
-          echo "    Copying $d..."
-          mkdir -p "$(dirname "$dest")"
-          cp -a "$d" "$dest"
-        fi
-      done
-    fi
+    idx=0
+    IFS=, read -ra names <<< "'"$COPY_NAMES"'"
+    for name in "${names[@]}"; do
+      src="/mnt/copy_folders/$idx"
+      dest="$HOME/$name"
+      if [ -d "$src" ] && [ ! -d "$dest" ]; then
+        echo "    Copying $name..."
+        mkdir -p "$dest"
+        # Exclude node_modules — handled by nm-local
+        tar -cf - --exclude=node_modules -C "$src" . | tar -xf - -C "$dest"
+      fi
+      idx=$((idx + 1))
+    done
   '
   ok
 else
@@ -415,10 +411,20 @@ else
   CURRENT_STEP=$((CURRENT_STEP + 1))
 fi
 
+# ─── Install MCP servers (globally) ──────────────────────────────────────────
+
+step "Installing MCP servers..."
+container exec -u root "$CONTAINER_NAME" sh -c '
+  npm ls -g @azure-devops/mcp >/dev/null 2>&1 && npm ls -g @playwright/mcp >/dev/null 2>&1
+' 2>/dev/null && ok "already installed" || {
+  container exec -u root "$CONTAINER_NAME" npm install -g @azure-devops/mcp @playwright/mcp >/dev/null 2>&1
+  ok
+}
+
 # ─── Ensure .bashrc sources /etc/profile.d/ (for nm-local, etc.) ─────────────
 
 step "Patching shell config..."
-container exec "$CONTAINER_NAME" bash -c '
+container exec -u claude "$CONTAINER_NAME" bash -c '
   MARKER="# ─── Source image-level profile scripts"
   if ! grep -q "$MARKER" ~/.bashrc 2>/dev/null; then
     sed -i "/^case \\\$- in/i\\
@@ -436,7 +442,7 @@ ok
 # user-level for same-named servers, even when the local binary path is broken).
 
 step "Provisioning MCP servers..."
-container exec "$CONTAINER_NAME" bash -c '
+container exec -u claude "$CONTAINER_NAME" bash -c '
   found=$(find $HOME -maxdepth 4 -name ".mcp.json" ! -path "*/.claude/*" -print -quit 2>/dev/null)
   if [ -n "$found" ]; then
     mkdir -p $HOME/.claude
