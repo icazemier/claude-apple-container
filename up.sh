@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'
 BOLD='\033[1m'; NC='\033[0m'
-TOTAL_STEPS=9
+TOTAL_STEPS=10
 CURRENT_STEP=0
 
 die() { printf "${RED}ERROR:${NC} %s\n" "$*" >&2; exit 1; }
@@ -425,6 +425,23 @@ container exec "$CONTAINER_NAME" bash -c '
 $MARKER (survive volume mounts) ───────────────\\
 for f in /etc/profile.d/*.sh; do [ -r \"\\\$f\" ] \\&\\& . \"\\\$f\"; done\\
 " ~/.bashrc
+  fi
+' 2>/dev/null
+ok
+
+# ─── Provision MCP servers (user-level, global paths) ───────────────────────
+# Reads project-level .mcp.json, strips node_modules/.bin/ prefixes so commands
+# resolve to globally-installed binaries, writes to ~/.claude/.mcp.json, then
+# removes the project-level file to prevent conflicts (project-level overrides
+# user-level for same-named servers, even when the local binary path is broken).
+
+step "Provisioning MCP servers..."
+container exec "$CONTAINER_NAME" bash -c '
+  found=$(find $HOME -maxdepth 4 -name ".mcp.json" ! -path "*/.claude/*" -print -quit 2>/dev/null)
+  if [ -n "$found" ]; then
+    mkdir -p $HOME/.claude
+    sed "s|node_modules/\.bin/||g" "$found" > $HOME/.claude/.mcp.json
+    find $HOME -maxdepth 4 -name ".mcp.json" ! -path "*/.claude/*" -delete 2>/dev/null || true
   fi
 ' 2>/dev/null
 ok

@@ -171,6 +171,29 @@ if mountpoint -q "$SWAP_MNT" 2>/dev/null; then
     echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
 fi
 
+# ─── Shell protection (cgroup v2) ──────────────────────────────────────────
+# Reserve memory + CPU for interactive sessions so the user always has
+# a responsive terminal, even under extreme resource pressure.
+SHELL_RESERVE_MB="${SHELL_RESERVE_MB:-256}"
+CG=/sys/fs/cgroup
+if [ -f "$CG/cgroup.controllers" ]; then
+    mkdir -p "$CG/init" "$CG/shell" "$CG/system" 2>/dev/null || true
+    # Move all root-cgroup processes (incl. vminitd) to init/
+    # Required before enabling subtree controllers (no-internal-process rule)
+    cat "$CG/cgroup.procs" 2>/dev/null | while read -r pid; do
+        echo "$pid" > "$CG/init/cgroup.procs" 2>/dev/null || true
+    done
+    if echo "+memory +cpu" > "$CG/cgroup.subtree_control" 2>/dev/null; then
+        echo $$ > "$CG/system/cgroup.procs" 2>/dev/null || true
+        echo $(($SHELL_RESERVE_MB * 1024 * 1024)) > "$CG/shell/memory.min" 2>/dev/null || true
+        echo 10000 > "$CG/shell/cpu.weight" 2>/dev/null || true
+        chown claude:claude "$CG/shell/cgroup.procs" 2>/dev/null || true
+        echo "Shell protection: cgroup active (${SHELL_RESERVE_MB}MB reserved)"
+    else
+        echo "Shell protection: cgroup unavailable, OOM-score fallback only"
+    fi
+fi
+
 # ─── Watchdog ────────────────────────────────────────────────────────────────
 /usr/local/bin/vm-watchdog.sh &
 
@@ -216,6 +239,22 @@ heavy_pids() {
         [ "$rss_kb" -lt 10000 ] 2>/dev/null && continue
         echo "$pid $rss_kb $comm"
     done | sort -k2 -rn | head -5 | awk '{print $1}'
+}
+
+# Raise OOM score on heavy non-shell processes so OOM killer targets them first
+raise_oom_scores() {
+    for d in /proc/[0-9]*; do
+        local pid="${d##*/}"
+        local comm rss_kb
+        comm=$(cat "$d/comm" 2>/dev/null) || continue
+        case "$comm" in
+            bash|sh|sleep|vm-watchdog|entrypoint.sh|init|sudo|sshd|vminitd|login|getty) continue ;;
+        esac
+        rss_kb=$(awk '/^VmRSS:/ {print $2}' "$d/status" 2>/dev/null) || continue
+        [ -z "$rss_kb" ] && continue
+        [ "$rss_kb" -lt 51200 ] 2>/dev/null && continue
+        echo 500 > "$d/oom_score_adj" 2>/dev/null || true
+    done
 }
 
 # ─── Dynamic swap growth ────────────────────────────────────────────────────
@@ -324,6 +363,11 @@ while true; do
         grow_swap || true
     fi
 
+    # Raise OOM scores on heavy processes when memory is getting low
+    if [ "$mem" -lt "$MEM_RESUME_MB" ] 2>/dev/null; then
+        raise_oom_scores
+    fi
+
     # ─── Memory management ───────────────────────────────────────────────
     if [ "$mem" -lt "$MEM_CRIT_MB" ]; then
         if [ "$THROTTLING" = false ]; then
@@ -364,10 +408,32 @@ watchdog-status() {
         echo "  ext4 image:"
         df -h /mnt/swap 2>/dev/null | awk 'NR==2 {printf "    used %s / %s (%s free)\n", $3, $2, $4}'
     fi
+    echo "─── Shell Protection ───"
+    if [ -d /sys/fs/cgroup/shell ]; then
+        local min_bytes min_mb
+        min_bytes=$(cat /sys/fs/cgroup/shell/memory.min 2>/dev/null || echo 0)
+        min_mb=$((min_bytes / 1024 / 1024))
+        echo "  cgroup: active (memory.min=${min_mb}MB cpu.weight=$(cat /sys/fs/cgroup/shell/cpu.weight 2>/dev/null || echo '?'))"
+        echo "  shell procs: $(cat /sys/fs/cgroup/shell/cgroup.procs 2>/dev/null | wc -l | tr -d ' ')"
+    else
+        echo "  cgroup: not available (OOM-score fallback only)"
+    fi
+    echo "  oom_score_adj: $(cat /proc/$$/oom_score_adj 2>/dev/null || echo 'unknown')"
     echo "─── Watchdog Log (last 15) ───"
     tail -15 /var/log/vm-watchdog.log 2>/dev/null || echo "  (no log yet)"
 }
 WATCHDOG_STATUS
+
+# ─── Shell protection: join reserved cgroup + OOM/CPU priority ─────────────
+
+RUN cat > /etc/profile.d/shell-protect.sh << 'SHELL_PROTECT'
+# Join protected cgroup if available (set up by entrypoint)
+if [ -d /sys/fs/cgroup/shell ]; then
+    sudo sh -c "echo $$ > /sys/fs/cgroup/shell/cgroup.procs" 2>/dev/null || true
+fi
+# OOM immunity + highest scheduling priority (works even without cgroups)
+sudo sh -c "echo -999 > /proc/$$/oom_score_adj; renice -20 $$" 2>/dev/null || true
+SHELL_PROTECT
 
 # ─── MCP servers (globally available for Claude Code) ───────────────────────
 
