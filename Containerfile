@@ -143,33 +143,21 @@ RUN cat > /usr/local/bin/entrypoint.sh << 'ENTRYPOINT_SCRIPT'
 #!/bin/bash
 set -e
 
-# ─── Swap (ext4 on loop device — same proven pattern as nm-local) ────────────
-# Creates a small initial swapfile (256MB). The watchdog grows it on demand
+# ─── Swap (direct files on ext4 rootfs) ──────────────────────────────────────
+# Creates a 256MB initial swapfile. The watchdog grows it on demand
 # up to SWAP_SIZE when memory pressure increases.
-SWAP_IMG=/var/swap.img
-SWAP_MNT=/mnt/swap
-SWAP_SIZE="${SWAP_SIZE:-2G}"
-if ! mountpoint -q "$SWAP_MNT" 2>/dev/null; then
-    if [ ! -f "$SWAP_IMG" ]; then
-        truncate -s "$SWAP_SIZE" "$SWAP_IMG"
-        mkfs.ext4 -q -m 0 "$SWAP_IMG"
-    fi
-    mkdir -p "$SWAP_MNT"
-    mount -o loop "$SWAP_IMG" "$SWAP_MNT" 2>/dev/null || true
+SWAP_DIR=/var/swap
+mkdir -p "$SWAP_DIR"
+if [ ! -f "$SWAP_DIR/swap0" ]; then
+    dd if=/dev/zero of="$SWAP_DIR/swap0" bs=1M count=256 2>/dev/null
+    chmod 600 "$SWAP_DIR/swap0"
+    mkswap "$SWAP_DIR/swap0" >/dev/null 2>&1
 fi
-if mountpoint -q "$SWAP_MNT" 2>/dev/null; then
-    # Create initial swap if first boot
-    if [ ! -f "$SWAP_MNT/swap0" ]; then
-        dd if=/dev/zero of="$SWAP_MNT/swap0" bs=1M count=256 status=none 2>/dev/null
-        chmod 600 "$SWAP_MNT/swap0"
-        mkswap -q "$SWAP_MNT/swap0" >/dev/null 2>&1
-    fi
-    # Activate all swap files (includes any grown by watchdog in previous session)
-    for f in "$SWAP_MNT"/swap*; do
-        [ -f "$f" ] && swapon "$f" 2>/dev/null || true
-    done
-    echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
-fi
+# Activate all swap files (includes any grown by watchdog in previous session)
+for f in "$SWAP_DIR"/swap*; do
+    [ -f "$f" ] && swapon "$f" 2>/dev/null || true
+done
+echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
 
 # ─── Shell protection (cgroup v2) ──────────────────────────────────────────
 # Reserve memory + CPU for interactive sessions so the user always has
@@ -211,10 +199,20 @@ LOG=/var/log/vm-watchdog.log
 POLL="${WATCHDOG_POLL:-5}"
 MEM_CRIT_MB="${WATCHDOG_MEM_CRIT_MB:-400}"
 MEM_RESUME_MB="${WATCHDOG_MEM_RESUME_MB:-1200}"
-SWAP_MNT=/mnt/swap
+SWAP_DIR=/var/swap
 SWAP_CHUNK_MB=256
+SWAP_DISK_MIN_MB=2048
 SWAP_ESCALATE_SEC=30
 SWAP_KILL_SEC=10
+
+_parse_mb() {
+    case "$1" in
+        *[Gg]) echo $(( ${1%[Gg]} * 1024 )) ;;
+        *[Mm]) echo ${1%[Mm]} ;;
+        *)     echo "$1" ;;
+    esac
+}
+SWAP_MAX_MB=$(_parse_mb "${SWAP_SIZE:-2G}")
 
 log() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" | tee -a "$LOG" >&2; }
 
@@ -259,30 +257,27 @@ raise_oom_scores() {
 
 # ─── Dynamic swap growth ────────────────────────────────────────────────────
 # Resume numbering from previous session (swap0 is entrypoint, swap1+ are ours)
-SWAP_NEXT=$(ls "$SWAP_MNT"/swap* 2>/dev/null | wc -l)
-
-SWAP_HOST_MIN_MB=2048  # Don't eat into host disk below this threshold
+SWAP_NEXT=$(ls "$SWAP_DIR"/swap* 2>/dev/null | wc -l)
 
 grow_swap() {
-    if ! mountpoint -q "$SWAP_MNT" 2>/dev/null; then return 1; fi
-    local f="$SWAP_MNT/swap${SWAP_NEXT}"
-    # Check space on ext4 image (the ceiling)
-    local img_avail_mb
-    img_avail_mb=$(df -m "$SWAP_MNT" 2>/dev/null | awk 'NR==2 {print $4}')
-    if [ -z "$img_avail_mb" ] || [ "$img_avail_mb" -lt "$SWAP_CHUNK_MB" ]; then
-        log "SWAP no space left on ext4 image (${img_avail_mb:-0}MB free)"
+    local f="$SWAP_DIR/swap${SWAP_NEXT}"
+    # Check total swap doesn't exceed ceiling
+    local total_swap_mb
+    total_swap_mb=$(awk '/^SwapTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
+    if [ "$total_swap_mb" -ge "$SWAP_MAX_MB" ] 2>/dev/null; then
+        log "SWAP at ceiling (${total_swap_mb}MB / ${SWAP_MAX_MB}MB)"
         return 1
     fi
-    # Check host disk space (rootfs is virtio-fs → host filesystem)
-    local host_avail_mb
-    host_avail_mb=$(df -m /var 2>/dev/null | awk 'NR==2 {print $4}')
-    if [ -n "$host_avail_mb" ] && [ "$host_avail_mb" -lt "$((SWAP_HOST_MIN_MB + SWAP_CHUNK_MB))" ]; then
-        log "SWAP host disk low (${host_avail_mb}MB free, need ${SWAP_HOST_MIN_MB}MB reserve)"
+    # Check disk space
+    local disk_avail_mb
+    disk_avail_mb=$(df -m /var 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ -n "$disk_avail_mb" ] && [ "$disk_avail_mb" -lt "$((SWAP_DISK_MIN_MB + SWAP_CHUNK_MB))" ]; then
+        log "SWAP disk low (${disk_avail_mb}MB free, need ${SWAP_DISK_MIN_MB}MB reserve)"
         return 1
     fi
-    dd if=/dev/zero of="$f" bs=1M count="$SWAP_CHUNK_MB" status=none 2>/dev/null || return 1
+    dd if=/dev/zero of="$f" bs=1M count="$SWAP_CHUNK_MB" 2>/dev/null || return 1
     chmod 600 "$f"
-    mkswap -q "$f" >/dev/null 2>&1 || return 1
+    mkswap "$f" >/dev/null 2>&1 || return 1
     swapon "$f" 2>/dev/null || return 1
     SWAP_NEXT=$((SWAP_NEXT + 1))
     log "SWAP grew +${SWAP_CHUNK_MB}MB (file: swap$((SWAP_NEXT - 1)))"
@@ -403,10 +398,10 @@ watchdog-status() {
         printf "  %-16s %6d MB\n", $1, $2/1024
     }' /proc/meminfo
     echo "─── Swap Files ───"
-    swapon --show 2>/dev/null || echo "  (none)"
-    if mountpoint -q /mnt/swap 2>/dev/null; then
-        echo "  ext4 image:"
-        df -h /mnt/swap 2>/dev/null | awk 'NR==2 {printf "    used %s / %s (%s free)\n", $3, $2, $4}'
+    cat /proc/swaps 2>/dev/null
+    if [ -d /var/swap ]; then
+        echo "  files: $(ls /var/swap/swap* 2>/dev/null | wc -l | tr -d ' ')"
+        echo "  disk: $(df -h /var 2>/dev/null | awk 'NR==2 {printf "%s used / %s (%s free)", $3, $2, $4}')"
     fi
     echo "─── Shell Protection ───"
     if [ -d /sys/fs/cgroup/shell ]; then
